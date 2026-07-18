@@ -562,6 +562,7 @@ async def async_entrypoint(container: _DemoContainer, config: TAMPConfiguration,
                     log_curobo_mesh_to_rerun(f"world/workspace/{obj.name}", obj.get_mesh(), static_transform=True)
 
                 save_dir = Path(output_dir) / "eval" / timestamp
+                rr.save(save_dir / "tiptop_run.rrd")
                 _log.info(f"Saving logs, results, and visualizations to {save_dir}")
 
                 # Add log file handler for this run

@@ -9,7 +9,7 @@ if [ ! -f "tiptop/__init__.py" ]; then
     exit 1
 fi
 
-REPO_URL="https://github.com/tiptop-robot/cuTAMP.git"
+REPO_URL="https://github.com/Str0keOOOO/cuTAMP.git"
 INSTALL_DIR="cutamp"
 REQUIRED_VERSION=$(python -c "
 import re

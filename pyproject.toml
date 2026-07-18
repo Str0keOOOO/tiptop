@@ -44,6 +44,11 @@ dependencies = [
 ur5 = [
     "ur_rtde",
 ]
+cobot-magic = [
+    "msgpack>=1",
+    "msgpack-numpy>=0.4.8",
+    "pyzmq>=25",
+]
 sam-server = [
     "fastapi",
     "pydantic",
@@ -85,6 +90,8 @@ go-home = "tiptop.scripts.go_to_conf:go_to_home_entrypoint"
 go-to-capture = "tiptop.scripts.go_to_conf:go_to_capture_entrypoint"
 gripper-open = "tiptop.scripts.gripper_actuate:gripper_open_entrypoint"
 gripper-close = "tiptop.scripts.gripper_actuate:gripper_close_entrypoint"
+cobot-controller-health = "tiptop.cobot_magic.controller_health:main"
+cobot-camera-health = "tiptop.perception.cameras.rs_camera:remote_realsense_health_main"
 
 # Main tiptop demo
 tiptop-run = "tiptop.tiptop_run:entrypoint"

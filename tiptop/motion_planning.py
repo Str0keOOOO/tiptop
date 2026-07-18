@@ -10,6 +10,7 @@ from curobo.wrap.reacher.motion_gen import MotionGen, MotionGenConfig, MotionGen
 from cutamp.motion_solver import MotionPlanningError
 from cutamp.robots import (
     get_panda_robotiq_ik_solver,
+    load_cobot_magic_container,
     load_fr3_robotiq_container,
     load_panda_container,
     load_panda_robotiq_container,
@@ -22,6 +23,7 @@ from cutamp.robots.franka import (
     get_fr3_franka_ik_solver,
     get_franka_ik_solver,
 )
+from cutamp.robots.cobot_magic import cobot_magic_curobo_cfg, get_cobot_magic_ik_solver
 from cutamp.robots.franka_robotiq import fr3_robotiq_curobo_cfg, get_fr3_robotiq_ik_solver
 from cutamp.robots.ur5 import get_ur5_ik_solver, ur5_curobo_cfg
 from cutamp.utils.common import sample_between_bounds
@@ -56,6 +58,9 @@ def get_ik_solver(world_cfg: WorldConfig, num_particles: int, warmup_iters: int 
         elif cfg.robot.type == "ur5":
             ik_solver = get_ur5_ik_solver(world_cfg)
             container = load_ur5_container(TensorDeviceType())
+        elif cfg.robot.type == "cobot_magic":
+            ik_solver = get_cobot_magic_ik_solver(world_cfg)
+            container = load_cobot_magic_container(TensorDeviceType())
         else:
             raise ValueError(f"Unknown robot type: {cfg.robot.type}")
 
@@ -104,6 +109,8 @@ def get_motion_gen(
         robot_cfg = franka_curobo_cfg()
     elif cfg.robot.type == "ur5":
         robot_cfg = ur5_curobo_cfg()
+    elif cfg.robot.type == "cobot_magic":
+        robot_cfg = cobot_magic_curobo_cfg()
     else:
         raise ValueError(f"Unknown robot type: {cfg.robot.type}")
 

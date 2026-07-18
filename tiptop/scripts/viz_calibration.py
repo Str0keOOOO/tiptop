@@ -5,6 +5,7 @@ import numpy as np
 import rerun as rr
 from curobo.types.base import TensorDeviceType
 from cutamp.robots import (
+    load_cobot_magic_container,
     load_fr3_franka_container,
     load_fr3_robotiq_container,
     load_panda_container,
@@ -32,6 +33,7 @@ def viz_calibration(rr_spawn: bool = True, viz_freq: float = 5.0, max_time: floa
     """
     setup_logging()
     rr.init("viz_calibration", spawn=rr_spawn)
+    rr.save("/tmp/viz_calibration.rrd")
     # Connect to robot
     client = get_robot_client()
     robot_rr = get_robot_rerun()
@@ -53,6 +55,8 @@ def viz_calibration(rr_spawn: bool = True, viz_freq: float = 5.0, max_time: floa
             robot_container = load_panda_robotiq_container(tensor_args)
         elif cfg.robot.type == "ur5":
             robot_container = load_ur5_container(tensor_args)
+        elif cfg.robot.type == "cobot_magic":
+            robot_container = load_cobot_magic_container(tensor_args)
         else:
             raise ValueError(f"Unknown robot type: {cfg.robot.type}")
 

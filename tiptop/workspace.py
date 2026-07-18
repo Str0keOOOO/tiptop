@@ -60,6 +60,34 @@ def ur5_workspace() -> tuple[Cuboid, ...]:
     return obstacles
 
 
+def cobot_magic_workspace() -> tuple[Cuboid, ...]:
+    table_top_z = -0.36
+    table_thickness = 0.02
+    table_z = table_top_z - table_thickness / 2
+
+    # The physical table supports the base. Split the tabletop around the base
+    # so its support surface is not treated as a collision with base_link.
+    table_front = Cuboid(
+        "table_front",
+        dims=[0.65, 1.2, table_thickness],
+        pose=[0.425, 0.0, table_z, *unit_quat],
+        color=[222, 184, 135],
+    )
+    table_left_of_base = Cuboid(
+        "table_left_of_base",
+        dims=[0.15, 0.5, table_thickness],
+        pose=[0.025, 0.35, table_z, *unit_quat],
+        color=[222, 184, 135],
+    )
+    table_right_of_base = Cuboid(
+        "table_right_of_base",
+        dims=[0.15, 0.5, table_thickness],
+        pose=[0.025, -0.35, table_z, *unit_quat],
+        color=[222, 184, 135],
+    )
+    return (table_front, table_left_of_base, table_right_of_base)
+
+
 @cache
 def workspace_cuboids() -> tuple[Cuboid, ...]:
     """Return workspace cuboids for the configured robot, with names prefixed by 'workspace_' to avoid collisions with objects discovered by actual perception."""
@@ -74,6 +102,8 @@ def workspace_cuboids() -> tuple[Cuboid, ...]:
         cuboids = fr3_workspace()
     elif cfg.robot.type == "ur5":
         cuboids = ur5_workspace()
+    elif cfg.robot.type == "cobot_magic":
+        cuboids = cobot_magic_workspace()
     else:
         raise ValueError(f"Unknown robot type: {cfg.robot.type}")
     return tuple(replace(c, name=f"workspace_{c.name}") for c in cuboids)
@@ -83,6 +113,7 @@ if __name__ == "__main__":
     import rerun as rr
 
     rr.init("robot_workspace", spawn=True)
+    rr.save("/tmp/robot_workspace.rrd")
     get_robot_rerun()
     for obj in workspace_cuboids():
         log_curobo_mesh_to_rerun(f"world/{obj.name}", obj.get_mesh(), static_transform=True)

@@ -1,13 +1,18 @@
+import argparse
+import json
 import logging
+import sys
 import time
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass, is_dataclass
 from functools import cache
+from typing import Any, Sequence
 
 import aiohttp
 import cv2
 import numpy as np
 from jaxtyping import Float, UInt8, UInt16
 
+from tiptop.cobot_magic.rpc_client import ZmqRpcClient
 from tiptop.config import tiptop_cfg
 from tiptop.perception.cameras.frame import Frame
 
@@ -335,3 +340,176 @@ async def rs_infer_depth_async(
     )
     depth_aligned = _depth_ir_to_color(depth, K_ir, intrinsics.T_color_from_ir, intrinsics.K_color, color_size=rgb_size)
     return depth_aligned
+
+
+def _required_remote_matrix(result: dict[str, Any], field: str, shape: tuple[int, ...]) -> np.ndarray:
+    if field not in result:
+        raise RuntimeError(f"Remote camera response is missing {field}")
+    array = np.asarray(result[field])
+    if array.dtype != np.float32:
+        raise RuntimeError(f"Remote camera {field} has dtype {array.dtype}, expected float32")
+    if array.shape != shape or not np.all(np.isfinite(array)):
+        raise RuntimeError(f"Remote camera {field} must be a finite matrix with shape {shape}")
+    return np.ascontiguousarray(array)
+
+
+def _required_remote_ir(result: dict[str, Any], field: str, rgb_shape: tuple[int, int]) -> np.ndarray:
+    if field not in result:
+        raise RuntimeError(f"Remote camera response is missing {field}")
+    array = np.asarray(result[field])
+    if array.dtype != np.uint8:
+        raise RuntimeError(f"Remote camera {field} has dtype {array.dtype}, expected uint8")
+    if array.shape != rgb_shape:
+        raise RuntimeError(f"Remote camera {field} has shape {array.shape}, expected {rgb_shape}")
+    return np.ascontiguousarray(array)
+
+
+def _required_remote_depth(
+    result: dict[str, Any], field: str, image_shape: tuple[int, int], dtype: np.dtype[Any]
+) -> np.ndarray:
+    if field not in result:
+        raise RuntimeError(f"Remote camera response is missing {field}")
+    array = np.asarray(result[field])
+    if array.dtype != dtype:
+        raise RuntimeError(f"Remote camera {field} has dtype {array.dtype}, expected {dtype}")
+    if array.shape != image_shape or not np.all(np.isfinite(array)):
+        raise RuntimeError(f"Remote camera {field} must be finite with shape {image_shape}")
+    return np.ascontiguousarray(array)
+
+
+class RemoteRealsenseCamera(ZmqRpcClient):
+    """RealSense camera client that receives the same data contract over RPC."""
+
+    def __init__(
+        self,
+        serial: str,
+        host: str,
+        port: int,
+        enable_depth: bool = False,
+        request_timeout_ms: int = 30_000,
+    ):
+        if not serial:
+            raise ValueError("serial must be non-empty")
+        self.serial = str(serial)
+        self._enable_depth = enable_depth
+        super().__init__(
+            host=host,
+            port=port,
+            request_timeout_ms=request_timeout_ms,
+            max_message_bytes=128 * 1024 * 1024,
+        )
+        _log.info("Configured remote RealSense %s through %s for FoundationStereo", self.serial, self.endpoint)
+
+    @cache
+    def get_intrinsics(self) -> RealsenseIntrinsics:
+        result = self._request("get_intrinsics", {"serial": self.serial})
+        if not isinstance(result, dict):
+            raise RuntimeError("Invalid get_intrinsics response")
+        if str(result.get("serial")) != self.serial:
+            raise RuntimeError(f"Remote camera returned intrinsics for {result.get('serial')!r}, expected {self.serial!r}")
+
+        K_color = _required_remote_matrix(result, "K_color", (3, 3))
+        distortion_color = _required_remote_matrix(result, "distortion_color", (5,))
+        K_ir = _required_remote_matrix(result, "K_ir", (3, 3))
+        T_color_from_ir = _required_remote_matrix(result, "T_color_from_ir", (4, 4))
+        if "baseline_ir" not in result:
+            raise RuntimeError("Remote camera response is missing baseline_ir")
+        baseline_ir = float(result["baseline_ir"])
+        if not np.isfinite(baseline_ir) or baseline_ir <= 0.0:
+            raise RuntimeError("Remote camera baseline_ir must be finite and positive")
+        return RealsenseIntrinsics(
+            K_color=K_color,
+            K_ir=K_ir,
+            baseline_ir=baseline_ir,
+            T_color_from_ir=T_color_from_ir,
+            distortion_color=distortion_color,
+        )
+
+    def list_cameras(self) -> list[dict[str, Any]]:
+        result = self._request("list_cameras", {})
+        if not isinstance(result, dict) or not isinstance(result.get("cameras"), list):
+            raise RuntimeError("Invalid list_cameras response")
+        return result["cameras"]
+
+    def read_camera(self) -> RealsenseFrame:
+        """Read an RPC frame with the same data contract as RealsenseCamera.read_camera()."""
+        result = self._request("read_camera", {"serial": self.serial})
+        if not isinstance(result, dict):
+            raise RuntimeError("Invalid read_camera response")
+        if str(result.get("serial")) != self.serial:
+            raise RuntimeError(f"Remote camera returned frame for {result.get('serial')!r}, expected {self.serial!r}")
+
+        rgb = np.asarray(result.get("rgb"))
+        if rgb.dtype != np.uint8 or rgb.ndim != 3 or rgb.shape[2] != 3:
+            raise RuntimeError(f"Remote camera rgb must be uint8 [H, W, 3], got {rgb.dtype} {rgb.shape}")
+        rgb = np.ascontiguousarray(rgb)
+        image_shape = rgb.shape[:2]
+
+        timestamp = float(result.get("timestamp"))
+        if not np.isfinite(timestamp):
+            raise RuntimeError("Remote camera timestamp must be finite")
+
+        ir_left = _required_remote_ir(result, "ir_left", image_shape)
+        ir_right = _required_remote_ir(result, "ir_right", image_shape)
+        depth = None
+        depth_raw = None
+        if self._enable_depth:
+            depth = _required_remote_depth(result, "depth", image_shape, np.dtype(np.float32))
+            depth_raw = _required_remote_depth(result, "depth_raw", image_shape, np.dtype(np.uint16))
+
+        intrinsics = self.get_intrinsics()
+        return RealsenseFrame(
+            serial=self.serial,
+            timestamp=timestamp,
+            rgb=rgb,
+            intrinsics=intrinsics.K_color,
+            depth=depth,
+            ir_left=ir_left,
+            ir_right=ir_right,
+            depth_raw=depth_raw,
+        )
+
+
+def _remote_camera_json_default(value: Any) -> Any:
+    if isinstance(value, np.ndarray):
+        return value.tolist()
+    if is_dataclass(value):
+        return asdict(value)
+    raise TypeError(f"Object of type {type(value).__name__} is not JSON serializable")
+
+
+def remote_realsense_health_main(argv: Sequence[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description="Check a forwarded Cobot Magic RealSense RPC endpoint")
+    parser.add_argument("--host", default="127.0.0.1")
+    parser.add_argument("--port", type=int, default=15556)
+    parser.add_argument("--serial", required=True)
+    parser.add_argument("--timeout-ms", type=int, default=5_000)
+    args = parser.parse_args(argv)
+
+    camera = RemoteRealsenseCamera(
+        serial=args.serial,
+        host=args.host,
+        port=args.port,
+        request_timeout_ms=args.timeout_ms,
+    )
+    try:
+        frame = camera.read_camera()
+        result = {
+            "ping": camera.ping(),
+            "health": camera.health(),
+            "cameras": camera.list_cameras(),
+            "intrinsics": camera.get_intrinsics(),
+            "frame": {
+                "rgb_shape": frame.rgb.shape,
+                "ir_left_shape": frame.ir_left.shape,
+                "ir_right_shape": frame.ir_right.shape,
+                "timestamp": frame.timestamp,
+            },
+        }
+        print(json.dumps(result, default=_remote_camera_json_default, sort_keys=True))
+        return 0
+    except Exception as exc:
+        print(f"Camera health check failed: {exc}", file=sys.stderr)
+        return 1
+    finally:
+        camera.close()

@@ -8,6 +8,7 @@ from tiptop.perception.cameras.frame import Frame
 from tiptop.perception.cameras.rs_camera import (
     RealsenseCamera,
     RealsenseFrame,
+    RemoteRealsenseCamera,
     rs_infer_depth_async,
 )
 from tiptop.perception.cameras.zed_camera import (
@@ -43,6 +44,13 @@ def get_depth_estimator(cam: Camera) -> DepthEstimator:
             return await rs_infer_depth_async(session, f, intrinsics)  # type: ignore[arg-type]
 
         return _rs_estimate
+    elif isinstance(cam, RemoteRealsenseCamera):
+        intrinsics = cam.get_intrinsics()
+
+        async def _remote_rs_estimate(session: aiohttp.ClientSession, f: Frame) -> np.ndarray:
+            return await rs_infer_depth_async(session, f, intrinsics)  # type: ignore[arg-type]
+
+        return _remote_rs_estimate
     else:
         raise ValueError(f"No depth estimator available for camera type: {type(cam).__name__}")
 
@@ -56,6 +64,17 @@ def _get_zed_camera(cam_cfg, depth: bool = False, pointcloud: bool = False) -> Z
     return ZedCamera(serial, resolution=resolution, fps=fps, flip=flip, depth=depth, pointcloud=pointcloud)
 
 
+def _get_remote_realsense_camera(cam_cfg, depth: bool = False) -> Camera:
+    """Create a RemoteRealsenseCamera from the local SSH-forwarded endpoint."""
+    return RemoteRealsenseCamera(
+        serial=str(cam_cfg.serial),
+        host=str(cam_cfg.get("host", "127.0.0.1")),
+        port=int(cam_cfg.get("port", 15556)),
+        enable_depth=depth,
+        request_timeout_ms=int(cam_cfg.get("request_timeout_ms", 30_000)),
+    )
+
+
 def get_hand_camera(depth: bool = False) -> Camera:
     """Get the hand camera by serial number."""
     cfg = tiptop_cfg()
@@ -65,6 +84,8 @@ def get_hand_camera(depth: bool = False) -> Camera:
         return _get_zed_camera(cam_cfg, depth=depth)
     elif cam_type == "realsense":
         return RealsenseCamera(str(cam_cfg.serial), enable_depth=depth)
+    elif cam_type == "remote_realsense":
+        return _get_remote_realsense_camera(cam_cfg, depth=depth)
     else:
         raise ValueError(f"Unknown camera type: {cam_type}")
 
@@ -78,5 +99,7 @@ def get_external_camera() -> Camera:
         return _get_zed_camera(cam_cfg)
     elif cam_type == "realsense":
         return RealsenseCamera(str(cam_cfg.serial))
+    elif cam_type == "remote_realsense":
+        return _get_remote_realsense_camera(cam_cfg)
     else:
         raise ValueError(f"Unknown camera type: {cam_type}")

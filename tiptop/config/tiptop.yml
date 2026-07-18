@@ -2,15 +2,18 @@
 
 # == Robot connection and control ==
 robot:
-  type: fr3_robotiq
-  dof: 7
+  type: cobot_magic
+  dof: 6
 
-  # IP address or hostname of the workstation running the Bamboo controller (directly networked to robot)
-  host: "your-ip-address"
+  # Local end of the SSH reverse tunnel: GPU:15555 -> upper computer:5555.
+  host: "127.0.0.1"
+  port: 15555
+  request_timeout_ms: 30000
+  trajectory_timeout_ms: 300000
 
-  # Bamboo robot and gripper control port. You don't need to change these unless you used custom ports
-  port: 5555
-  gripper_port: 5559
+  # The upper-computer backend currently controls the right arm. The GPU client
+  # sends only six arm joints; ROS topics and the servo loop remain remote.
+  arm: right
 
   # == Speed ratio for motions (0.0 to 1.0) ==
   # This corresponds to the speed of the robot
@@ -19,11 +22,11 @@ robot:
   time_dilation_factor: 0.2
 
   # Robot configurations
-  q_home: [0.0, -0.628, 0.0, -2.513, 0.0, 1.885, 0.0]
-  q_capture: [-0.034, 0.090, 0.080, -1.319, -0.003, 1.253, 0.030]
+  q_home: [-0.018473196, 0.087673544, -0.386803256, -0.018159204, 0.757174264, 0.025067028]
+  q_capture: [0.082667116, 0.694777076, -0.711872196, -0.060583012, 0.82571174, 0.088580632]
 
 # == Camera configurations ==
-# Supported types: zed, realsense
+# Supported types: zed, realsense, remote_realsense
 # ZED cameras support optional resolution and fps settings:
 #   HD720: 15/30/60 fps, HD1080: 15/30 fps, HD2K: 15 fps
 #   If not specified, defaults to HD720 at 60 fps
@@ -31,15 +34,18 @@ robot:
 cameras:
   # TiPToP only uses the hand camera for perception
   hand:
-    serial: "hand-serial"
-    type: zed
+    # Confirmed by the remote camera service: /camera_r, role=right_wrist.
+    serial: "339222070351"
+    type: remote_realsense
+    host: "127.0.0.1"
+    port: 15556
 
   # External camera is optional but helpful for recording execution and scene visualization script (viz-scene)
   external:
-    serial: "external-serial"
-    type: zed
-    resolution: HD1080
-    fps: 30
+    serial: "339222070351"
+    type: remote_realsense
+    host: "127.0.0.1"
+    port: 15556
 
 # == Perception services ==
 # No need to change these unless you're running them on a remote machine or changed the ports
@@ -49,8 +55,15 @@ perception:
 
   m2t2:
     url: "http://localhost:8123"
-    # Set to false when world coordinate frame differs from the robot base link frame
-    apply_bounds: true
+    # This scene uses a low stool: its valid points fall below M2T2's fixed z=-0.2 m bound.
+    # Keep the full point cloud for the temporary run-through test.
+    apply_bounds: false
+
+  # Detected support structures must remain static; their meshes are still used
+  # for collision checking. Substring matching handles labels such as
+  # "stool_seat" and "black_stool_seat".
+  static_support_label_patterns:
+    - "stool_seat"
   
   sam:
     mode: "local"
@@ -60,4 +73,3 @@ perception:
   voxel_downsample_size: 0.0075  # Point cloud downsampling in meters before feeding into M2T2
   contact_threshold_m: 0.01      # Grasp-object association distance threshold
   mask_erosion_pixels: 3         # Pixels to erode segmentation masks to reduce noise
-
