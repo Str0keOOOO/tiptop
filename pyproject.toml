@@ -22,7 +22,6 @@ dependencies = [
     "aiohttp",
     "bamboo-franka-client>=0.1.1",
     "dill",
-    "google-genai>=0.6.0",
     "jaxtyping",
     "matplotlib",
     "msgpack-numpy>=0.4.8",
@@ -105,7 +104,7 @@ tiptop-server = "tiptop.tiptop_websocket_server:entrypoint"
 
 [tool.pytest.ini_options]
 markers = [
-    "integration: requires M2T2 server and GOOGLE_API_KEY",
+    "integration: requires M2T2 and VLM servers",
 ]
 
 [tool.setuptools.packages]

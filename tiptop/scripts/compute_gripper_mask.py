@@ -1,10 +1,10 @@
-"""Compute gripper mask using Gemini detection + SAM segmentation."""
+"""Compute gripper mask using the configured VLM and SAM segmentation."""
 
 import logging
 
 import cv2
 import numpy as np
-from tiptop.perception.gemini import gemini_client, load_json
+from tiptop.perception.vlm import gemini_client, load_json
 from PIL import Image
 from scipy.ndimage import binary_dilation, binary_fill_holes
 
@@ -25,10 +25,10 @@ The format should be as follows: [{"box_2d": [ymin, xmin, ymax, xmax], "label": 
 
 def compute_gripper_mask(gemini_model: str = "gemini-robotics-er-1.6-preview", dilation_iters: int = 8):
     """
-    Compute gripper mask using Gemini detection and SAM segmentation.
+    Compute gripper mask using the configured VLM and SAM segmentation.
 
     Args:
-        gemini_model: Gemini model to use for gripper detection.
+        gemini_model: Legacy model identifier forwarded to the VLM service.
         dilation_iters: Number of binary dilation iterations to apply to the mask.
     """
     setup_logging()
@@ -39,7 +39,7 @@ def compute_gripper_mask(gemini_model: str = "gemini-robotics-er-1.6-preview", d
     rgb = frame.rgb
     rgb_pil = Image.fromarray(rgb)
 
-    # Query Gemini to get gripper bounding box
+    # Query the VLM to get the gripper bounding box.
     client = gemini_client()
     response = client.models.generate_content(model=gemini_model, contents=[rgb_pil, _prompt])
     bboxes: list = load_json(response.text)

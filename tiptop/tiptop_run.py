@@ -296,7 +296,7 @@ def process_scene_geometry(
         xyz_map: World-space XYZ coordinates (H, W, 3)
         rgb_map: RGB image (H, W, 3) in 0-255 range
         masks: Segmentation masks from SAM2
-        bboxes: Bounding boxes from Gemini
+        bboxes: Bounding boxes from the VLM
         grasps: Grasp predictions from M2T2
         object_pcds: Optional pre-computed object point clouds
 

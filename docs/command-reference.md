@@ -23,7 +23,7 @@ See [Getting Started - Run TiPToP](getting-started.md#run-tiptop) for setup inst
 - Perception servers (M2T2 and FoundationStereo) must be running
 - Robot must be calibrated and gripper mask computed
 - Workspace obstacles must be defined (see [Getting Started](getting-started.md#define-the-static-workspace))
-- `GOOGLE_API_KEY` environment variable must be set
+- Configured VLM server must be running
 
 **Available flags:**
 
@@ -88,7 +88,7 @@ Offline evaluation mode. Loads a pre-recorded RGB-D observation from an H5 file 
 
 **Prerequisites:**
 - M2T2 server must be running
-- `GOOGLE_API_KEY` environment variable must be set
+- Configured VLM server must be running
 
 **Available flags:**
 
@@ -124,7 +124,7 @@ Re-runs TiPToP from a saved run directory. Loads the observation (RGB, depth, in
 
 **Prerequisites:**
 - M2T2 server must be running
-- `GOOGLE_API_KEY` environment variable must be set
+- Configured VLM server must be running
 - A saved TiPToP run directory (from `tiptop-run`, `tiptop-h5`, or `tiptop-rerun`)
 
 **Available flags:**
@@ -164,7 +164,7 @@ Runs the TiPToP perception and planning pipeline as a WebSocket server. Clients 
 
 **Prerequisites:**
 - M2T2 server must be running
-- `GOOGLE_API_KEY` environment variable must be set
+- Configured VLM server must be running
 
 **Available flags:**
 
@@ -536,11 +536,11 @@ After calibration, use `viz-calibration` to verify the camera frame aligns corre
 
 ### compute-gripper-mask
 
-Computes a binary mask to filter out the gripper from perception outputs using Gemini for detection and SAM2 for segmentation. This mask removes gripper geometry from the projected point cloud, preventing the motion planner from treating the gripper as an obstacle.
+Computes a binary mask to filter out the gripper from perception outputs using the configured VLM for detection and SAM2 for segmentation. This mask removes gripper geometry from the projected point cloud, preventing the motion planner from treating the gripper as an obstacle.
 
 **Prerequisites:**
 
-- `GOOGLE_API_KEY` environment variable must be set (used for Gemini detection)
+- Configured VLM server must be running
 - Robot should be in a position where the gripper is clearly visible and distinguishable from the background
 
 **Example usage:**

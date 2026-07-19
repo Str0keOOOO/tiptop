@@ -27,19 +27,19 @@ async def detect_and_segment(rgb: UInt8[np.ndarray, "h w 3"], task_instruction: 
     )
 
     async def _detect():
-        from tiptop.perception.gemini import detect_and_translate_async
+        from tiptop.perception.vlm import detect_and_translate_async
 
-        _log.info(f"Starting Gemini object detection")
+        _log.info(f"Starting VLM object detection")
         _st = time.perf_counter()
         _bboxes, _grounded_atoms = await detect_and_translate_async(rgb_pil_resized, task_instruction)
         _dur = time.perf_counter() - _st
-        _log.info(f"Gemini detection took {_dur:.2f}s ({len(_bboxes)} objects, {len(_grounded_atoms)} atoms)")
+        _log.info(f"VLM detection took {_dur:.2f}s ({len(_bboxes)} objects, {len(_grounded_atoms)} atoms)")
         return _bboxes, _grounded_atoms
 
     def _segment(_bboxes: list[dict]):
         from tiptop.perception.sam2 import sam2_segment_objects
 
-        _log.info(f"Starting SAM2 object segmentation with Gemini masks")
+        _log.info(f"Starting SAM2 object segmentation with VLM boxes")
         _st = time.perf_counter()
         # TODO: async version of this?
         _masks = sam2_segment_objects(rgb_pil, _bboxes)

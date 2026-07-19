@@ -50,6 +50,13 @@ cameras:
 # == Perception services ==
 # No need to change these unless you're running them on a remote machine or changed the ports
 perception:
+  # VLM contract: image + full TiPToP prompt -> generated text.
+  # The service must accept multipart ``image`` and ``prompt`` fields.
+  vlm:
+    url: "http://localhost:8011"
+    endpoint: "/generate"
+    timeout_seconds: 120
+
   foundation_stereo:
     url: "http://localhost:1234"
 
