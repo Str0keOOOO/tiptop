@@ -73,6 +73,9 @@ def build_tamp_config(
         placement_check="obb",
         placement_shrink_dist=0.01,
         enable_visualizer=enable_visualizer,
+        # TiPToP persists optimizer Rerun recordings; a headless GPU server
+        # must not require a local graphical viewer to produce those files.
+        rr_spawn=False,
         coll_sphere_radius=0.008,
     )
 

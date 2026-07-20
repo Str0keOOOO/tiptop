@@ -61,7 +61,7 @@ def ur5_workspace() -> tuple[Cuboid, ...]:
 
 
 def cobot_magic_workspace() -> tuple[Cuboid, ...]:
-    table_top_z = -0.36
+    table_top_z = -0.10
     table_thickness = 0.02
     table_z = table_top_z - table_thickness / 2
 
@@ -73,19 +73,7 @@ def cobot_magic_workspace() -> tuple[Cuboid, ...]:
         pose=[0.425, 0.0, table_z, *unit_quat],
         color=[222, 184, 135],
     )
-    table_left_of_base = Cuboid(
-        "table_left_of_base",
-        dims=[0.15, 0.5, table_thickness],
-        pose=[0.025, 0.35, table_z, *unit_quat],
-        color=[222, 184, 135],
-    )
-    table_right_of_base = Cuboid(
-        "table_right_of_base",
-        dims=[0.15, 0.5, table_thickness],
-        pose=[0.025, -0.35, table_z, *unit_quat],
-        color=[222, 184, 135],
-    )
-    return (table_front, table_left_of_base, table_right_of_base)
+    return (table_front,)
 
 
 @cache
