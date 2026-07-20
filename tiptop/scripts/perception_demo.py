@@ -8,13 +8,13 @@ import rerun as rr
 from curobo.types.base import TensorDeviceType
 from cutamp.robots import load_cobot_magic_container, load_fr3_robotiq_container, load_ur5_container
 
-from tiptop.config import load_calibration, tiptop_cfg
+from tiptop.config import load_tcp_from_camera, tiptop_cfg
 from tiptop.perception.cameras import (
     RealsenseFrame,
     get_depth_estimator,
     get_hand_camera,
 )
-from tiptop.perception.m2t2 import generate_grasps, m2t2_to_tiptop_transform
+from tiptop.perception.m2t2 import generate_grasps, m2t2_grasp_from_tcp
 from tiptop.perception.utils import depth_to_xyz
 from tiptop.utils import get_robot_client, get_robot_rerun, load_gripper_mask, patch_log_level, setup_logging
 from tiptop.viz_utils import get_gripper_mesh, get_heatmap
@@ -44,7 +44,7 @@ async def _run_demo(num_grasps_per_object: int):
     # Setup camera and depth estimator
     cam = get_hand_camera()
     depth_estimator = get_depth_estimator(cam)
-    ee_from_cam = load_calibration(cam.serial)
+    tcp_from_camera = load_tcp_from_camera(cam.serial)
 
     # Extract the camera frame
     frame = cam.read_camera()
@@ -52,8 +52,8 @@ async def _run_demo(num_grasps_per_object: int):
     q_curr = client.get_joint_positions()
     robot_rr.set_joint_positions(q_curr)
     q_curr_pt = tensor_args.to_device(q_curr)
-    world_from_ee = robot_container.kin_model.get_state(q_curr_pt).ee_pose.get_numpy_matrix()[0]
-    world_from_cam = world_from_ee @ ee_from_cam
+    world_from_tcp = robot_container.kin_model.get_state(q_curr_pt).ee_pose.get_numpy_matrix()[0]
+    world_from_cam = world_from_tcp @ tcp_from_camera
     rr.log("cam", rr.Pinhole(image_from_camera=K))
     rr.log("cam", rr.Transform3D(translation=world_from_cam[:3, 3], mat3x3=world_from_cam[:3, :3]))
     _log.info("Successfully retrieved camera frame and robot joint positions")
@@ -107,11 +107,11 @@ async def _run_demo(num_grasps_per_object: int):
     vertices = np.asarray(gripper_mesh.vertices)
     vertices_hom = np.c_[vertices, np.ones(len(vertices))]  # Add homogeneous coordinate
     faces = np.asarray(gripper_mesh.triangles)
-    m2t2_to_tiptop = m2t2_to_tiptop_transform()
+    m2t2_from_tcp = m2t2_grasp_from_tcp(str(cfg.robot.type))
 
     for obj_name, grasps_dict in grasps.items():
         # Convert to tiptop convention and select top grasps
-        grasp_poses = grasps_dict["poses"][:num_grasps_per_object] @ m2t2_to_tiptop
+        grasp_poses = grasps_dict["poses"][:num_grasps_per_object] @ m2t2_from_tcp
         confidences = grasps_dict["confidences"][:num_grasps_per_object]
         transformed_verts = np.einsum("nij,mj->nmi", grasp_poses, vertices_hom)[..., :3]
         colors = get_heatmap(confidences)

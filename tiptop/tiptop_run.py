@@ -21,11 +21,16 @@ from curobo.wrap.reacher.motion_gen import MotionGen
 from cutamp.config import TAMPConfiguration
 from cutamp.envs import TAMPEnvironment
 from cutamp.tamp_domain import HandEmpty, Holding, On
+from cutamp.robots.cobot_magic import (
+    cobot_magic_gripper_closed_position,
+    cobot_magic_gripper_joint_name,
+    cobot_magic_gripper_open_position,
+)
 from cutamp.utils.rerun_utils import log_curobo_mesh_to_rerun
 from jaxtyping import Bool, Float
 from scipy.spatial import KDTree
 
-from tiptop.config import load_calibration, tiptop_cfg
+from tiptop.config import load_tcp_from_camera, tiptop_cfg
 from tiptop.execute_plan import execute_cutamp_plan
 from tiptop.motion_planning import build_curobo_solvers, go_to_capture
 from tiptop.perception.cameras import (
@@ -37,7 +42,7 @@ from tiptop.perception.cameras import (
     get_external_camera,
     get_hand_camera,
 )
-from tiptop.perception.m2t2 import m2t2_to_tiptop_transform
+from tiptop.perception.m2t2 import m2t2_grasp_from_tcp
 from tiptop.perception.sam2 import sam2_client
 from tiptop.perception.segmentation import segment_pointcloud_by_masks, segment_table_with_ransac
 from tiptop.perception.utils import convert_trimesh_box_to_curobo_cuboid, convert_trimesh_to_curobo_mesh
@@ -90,7 +95,7 @@ class _DemoContainer:
     cam: Camera
     external_cam: Camera | None
     enable_recording: bool
-    ee_from_cam: Float[np.ndarray, "4 4"]
+    tcp_from_camera: Float[np.ndarray, "4 4"]
     depth_estimator: DepthEstimator
 
     gripper_mask: Bool[np.ndarray, "h w"]
@@ -110,11 +115,12 @@ class ProcessedScene:
 
 
 def capture_live_observation(container: _DemoContainer) -> Observation:
-    """Read robot joint positions and compute world_from_cam via forward kinematics."""
+    """Read six arm joints and compute world_from_camera through the TCP FK."""
     q_curr = container.robot.get_joint_positions()
     q_curr_pt = tensor_args.to_device(q_curr)
-    world_from_ee = container.motion_gen.kinematics.get_state(q_curr_pt).ee_pose.get_numpy_matrix()[0]
-    world_from_cam = world_from_ee @ container.ee_from_cam
+    # Cobot's ee_link is tool_center_point, hence this is world_from_tcp.
+    world_from_tcp = container.motion_gen.kinematics.get_state(q_curr_pt).ee_pose.get_numpy_matrix()[0]
+    world_from_cam = world_from_tcp @ container.tcp_from_camera
     frame = container.cam.read_camera()
     return Observation(frame=frame, world_from_cam=world_from_cam, q_init=q_curr)
 
@@ -129,7 +135,7 @@ def get_demo_container(
     # Setup cameras
     cam = get_hand_camera()
     external_cam = get_external_camera()
-    ee_from_cam = load_calibration(cam.serial)
+    tcp_from_camera = load_tcp_from_camera(cam.serial)
 
     # External camera for recording (if enabled)
     if enable_recording:
@@ -149,7 +155,7 @@ def get_demo_container(
         cam=cam,
         external_cam=external_cam,
         enable_recording=enable_recording,
-        ee_from_cam=ee_from_cam,
+        tcp_from_camera=tcp_from_camera,
         depth_estimator=get_depth_estimator(cam),
         gripper_mask=load_gripper_mask(),
         ik_solver=ik_solver,
@@ -404,7 +410,8 @@ def process_scene_geometry(
         pcd = object_pcds[label]
         rr.log(f"obj_pcd/{label_clean}", rr.Points3D(positions=pcd.points, colors=pcd.colors))
 
-        # Transform grasps to tcp frame
+        # M2T2 predictions are world_from_m2t2_grasp.  Convert them to the
+        # same TCP frame used by Cobot FK/IK/MotionGen and attached objects.
         grasp_dict = filtered_grasps[label]
         world_from_obj = np.eye(4)
         curobo_pose = np.array(curobo_mesh.pose)
@@ -412,12 +419,13 @@ def process_scene_geometry(
         world_from_obj[:3, 3] = curobo_pose[:3]
         obj_from_world = np.linalg.inv(world_from_obj)
 
-        world_from_grasp = grasp_dict["poses"] @ m2t2_to_tiptop_transform()
-        obj_from_grasp = obj_from_world @ world_from_grasp
-        filtered_grasps[label]["grasps_obj"] = tensor_args.to_device(obj_from_grasp)
+        world_from_m2t2_grasp = grasp_dict["poses"]
+        world_from_tcp_target = world_from_m2t2_grasp @ m2t2_grasp_from_tcp()
+        obj_from_tcp_target = obj_from_world @ world_from_tcp_target
+        filtered_grasps[label]["grasps_obj"] = tensor_args.to_device(obj_from_tcp_target)
         filtered_grasps[label]["confidences_pt"] = tensor_args.to_device(filtered_grasps[label]["confidences"])
 
-        if len(world_from_grasp) == 0:
+        if len(world_from_tcp_target) == 0:
             continue
 
         # Visualize the resulting grasps
@@ -425,7 +433,7 @@ def process_scene_geometry(
         my_vertices_hom = vertices_hom.copy()
 
         # Convert to tiptop convention and select top grasps
-        grasp_poses = world_from_grasp[:30]
+        grasp_poses = world_from_tcp_target[:30]
         confidences = filtered_grasps[label]["confidences"][:30]
         transformed_verts = np.einsum("nij,mj->nmi", grasp_poses, my_vertices_hom)[..., :3]
         colors = get_heatmap(confidences)
@@ -555,13 +563,17 @@ async def async_entrypoint(container: _DemoContainer, config: TAMPConfiguration,
                 timestamp = now.strftime("%Y-%m-%d_%H-%M-%S")
                 iso_timestamp = now.isoformat(timespec="seconds")
                 date_str = now.strftime("%Y-%m-%d")
-                rr.init("tiptop_run", recording_id=timestamp, spawn=True)
+                rr.init("tiptop_run", recording_id=timestamp, spawn=False)
                 # Log workspace for visualization purposes
                 robot_rr = get_robot_rerun()
                 for obj in workspace_cuboids():
                     log_curobo_mesh_to_rerun(f"world/workspace/{obj.name}", obj.get_mesh(), static_transform=True)
 
                 save_dir = Path(output_dir) / "eval" / timestamp
+                # Rerun's native save sink requires its parent directory to
+                # exist.  Create it before rr.save so headless recording does
+                # not terminate before perception begins.
+                save_dir.mkdir(parents=True, exist_ok=True)
                 rr.save(save_dir / "tiptop_run.rrd")
                 _log.info(f"Saving logs, results, and visualizations to {save_dir}")
 
@@ -608,6 +620,18 @@ async def async_entrypoint(container: _DemoContainer, config: TAMPConfiguration,
 
                         if cutamp_plan is not None and execute_plan:
                             _log.info("Executing plan...")
+                            execution_kwargs = {"client": container.robot}
+                            if cfg.robot.type == "cobot_magic":
+                                execution_kwargs.update(
+                                    {
+                                        "rerun_robot": robot_rr,
+                                        "rerun_gripper_joint_name": cobot_magic_gripper_joint_name,
+                                        "rerun_gripper_positions": {
+                                            "open": cobot_magic_gripper_open_position,
+                                            "close": cobot_magic_gripper_closed_position,
+                                        },
+                                    }
+                                )
                             # Execute with optional recording
                             if container.enable_recording:
                                 cameras_to_record = [
@@ -622,9 +646,9 @@ async def async_entrypoint(container: _DemoContainer, config: TAMPConfiguration,
                                         (container.cam, save_dir / "hand_cam.svo", save_dir / "hand_cam.mp4"),
                                     )
                                 with record_cameras(cameras_to_record):
-                                    execute_cutamp_plan(cutamp_plan, client=container.robot)
+                                    execute_cutamp_plan(cutamp_plan, **execution_kwargs)
                             else:
-                                execute_cutamp_plan(cutamp_plan, client=container.robot)
+                                execute_cutamp_plan(cutamp_plan, **execution_kwargs)
                             _log.info("Finished executing plan!")
                         elif cutamp_plan is not None:
                             _log.info("Skipping cuTAMP plan execution on real robot")

@@ -201,7 +201,8 @@ def load_h5_observation(h5_path: Path) -> Observation:
     world_from_cam = np.eye(4, dtype=np.float32)
     world_from_cam[:3, :3] = R
     world_from_cam[:3, 3] = pos_w.astype(np.float32)
-    world_from_cam[:3, 3] -= np.array([0.0, 0.0, -0.015], dtype=np.float32)  # calibration offset for this h5 format
+    # The H5 pose is used as recorded.  Tool and camera offsets must be part
+    # of an explicitly named rigid transform, never a world-axis correction.
 
     frame = Frame(
         serial="static",
@@ -415,4 +416,3 @@ def rerun_entrypoint():
         os._exit(1)
     else:
         os._exit(0)
-

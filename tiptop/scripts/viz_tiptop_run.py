@@ -14,10 +14,15 @@ from omegaconf import OmegaConf
 from curobo.types.base import TensorDeviceType
 from cutamp.envs.utils import TAMPEnvironment
 from cutamp.robots import load_robot_container
+from cutamp.robots.cobot_magic import (
+    cobot_magic_gripper_closed_position,
+    cobot_magic_gripper_joint_name,
+    cobot_magic_gripper_open_position,
+)
 from cutamp.robots.utils import RerunRobot
 from cutamp.utils.common import pose_list_to_mat4x4
 from cutamp.utils.rerun_utils import log_curobo_pose_to_rerun, curobo_to_rerun, log_curobo_mesh_to_rerun
-from tiptop.perception.m2t2 import m2t2_to_tiptop_transform
+from tiptop.perception.m2t2 import m2t2_grasp_from_tcp
 from tiptop.planning import load_tiptop_plan
 from tiptop.utils import get_robot_rerun, setup_logging
 from tiptop.viz_utils import get_heatmap, get_gripper_mesh
@@ -25,7 +30,7 @@ from tiptop.viz_utils import get_heatmap, get_gripper_mesh
 _log = logging.getLogger(__name__)
 
 
-def viz_grasps(grasps, num_grasps_per_object: int):
+def viz_grasps(grasps, num_grasps_per_object: int, robot_type: str):
     """Visualize grasps"""
     gripper_mesh = get_gripper_mesh()
     vertices = np.asarray(gripper_mesh.vertices)
@@ -37,10 +42,11 @@ def viz_grasps(grasps, num_grasps_per_object: int):
         if num_grasps == 0:
             continue
 
-        world_from_grasp = grasp_dict["poses"][:num_grasps_per_object] @ m2t2_to_tiptop_transform()
+        world_from_m2t2_grasp = grasp_dict["poses"][:num_grasps_per_object]
+        world_from_tcp_target = world_from_m2t2_grasp @ m2t2_grasp_from_tcp(robot_type)
         confidences = grasp_dict["confidences"][:num_grasps_per_object]
 
-        transformed_verts = np.einsum("nij,mj->nmi", world_from_grasp, vertices_hom)[..., :3]
+        transformed_verts = np.einsum("nij,mj->nmi", world_from_tcp_target, vertices_hom)[..., :3]
         colors = get_heatmap(confidences)
 
         for grasp_idx, (verts, color) in enumerate(zip(transformed_verts, colors)):
@@ -95,6 +101,16 @@ def viz_tiptop_plan(tiptop_plan: dict, cutamp_env: TAMPEnvironment, robot_rr: Re
             last_q = action_dict["positions"][-1]
 
         elif action_dict["type"] == "gripper":
+            if robot_type == "cobot_magic":
+                if action_dict["action"] == "close":
+                    gripper_position = cobot_magic_gripper_closed_position
+                elif action_dict["action"] == "open":
+                    gripper_position = cobot_magic_gripper_open_position
+                else:
+                    raise ValueError(f"Unknown gripper action: {action_dict['action']}")
+                rr.set_time(timeline, duration=curr_time)
+                robot_rr.set_joint_position(cobot_magic_gripper_joint_name, gripper_position)
+
             if action_dict["action"] == "close":
                 # Parse object name from label e.g. "Pick(crackers_in_wrapper, grasp1, q1)"
                 match = re.match(r"\w+\((\w+)", action_dict["label"])
@@ -187,7 +203,7 @@ def viz_tiptop_run(
     # Grasps
     if visualize_grasps:
         grasps = torch.load(perception_dir / "grasps.pt", weights_only=False, map_location="cpu")
-        viz_grasps(grasps, num_grasps_per_object)
+        viz_grasps(grasps, num_grasps_per_object, robot_type)
 
     # Load TAMPEnvironment using dill (variant of pickle)
     cutamp_env = None

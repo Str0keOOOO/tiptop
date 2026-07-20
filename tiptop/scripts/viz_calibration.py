@@ -13,12 +13,30 @@ from cutamp.robots import (
     load_ur5_container,
 )
 
-from tiptop.config import load_calibration, tiptop_cfg
-from tiptop.perception.cameras import get_hand_camera
+from tiptop.config import load_tcp_from_camera, tiptop_cfg
+from tiptop.perception.cameras import RemoteRealsenseCamera, get_hand_camera
+from tiptop.perception.cameras.rs_camera import RealsenseIntrinsics, rs_infer_depth
 from tiptop.perception.utils import depth_to_xyz
 from tiptop.utils import get_robot_client, get_robot_rerun, patch_log_level, setup_logging
 
 _log = logging.getLogger(__name__)
+
+
+def _depth_for_visualization(frame, intrinsics: RealsenseIntrinsics | None) -> np.ndarray:
+    """Return RGB-aligned metres without requiring the optional device depth stream.
+
+    The remote Cobot RealSense contract intentionally sends RGB and the two IR
+    images, not D435 onboard depth.  Reuse TiPToP's normal FoundationStereo
+    path in that case; its output is already projected onto the RGB grid.
+    """
+    if frame.depth is not None:
+        return frame.depth.copy()
+    if intrinsics is None:
+        raise RuntimeError(
+            "Calibration visualization needs depth, but this camera does not provide device depth "
+            "or RealSense IR intrinsics for FoundationStereo."
+        )
+    return rs_infer_depth(frame, intrinsics)
 
 
 def viz_calibration(rr_spawn: bool = True, viz_freq: float = 5.0, max_time: float = 60.0):
@@ -39,8 +57,12 @@ def viz_calibration(rr_spawn: bool = True, viz_freq: float = 5.0, max_time: floa
     robot_rr = get_robot_rerun()
 
     # Setup wrist camera
-    cam = get_hand_camera(depth=True)
-    ee_from_cam = load_calibration(cam.serial)
+    # Cobot_Magic follows TiPToP's RGB + IR stereo contract.  Do not request
+    # the optional D435 depth fields from its RPC server.
+    camera_is_remote_realsense = str(tiptop_cfg().cameras.hand.type) == "remote_realsense"
+    cam = get_hand_camera(depth=not camera_is_remote_realsense)
+    realsense_intrinsics = cam.get_intrinsics() if isinstance(cam, RemoteRealsenseCamera) else None
+    tcp_from_camera = load_tcp_from_camera(cam.serial)
 
     cfg = tiptop_cfg()
     tensor_args = TensorDeviceType()
@@ -79,16 +101,19 @@ def viz_calibration(rr_spawn: bool = True, viz_freq: float = 5.0, max_time: floa
             frame = cam.read_camera()
             q_curr = client.get_joint_positions()
             q_curr_pt = tensor_args.to_device(q_curr)
-            world_from_ee = robot_container.kin_model.get_state(q_curr_pt).ee_pose.get_numpy_matrix()[0]
-            world_from_cam = world_from_ee @ ee_from_cam
+            world_from_tcp = robot_container.kin_model.get_state(q_curr_pt).ee_pose.get_numpy_matrix()[0]
+            world_from_cam = world_from_tcp @ tcp_from_camera
 
             # Read camera frame
             rgb = frame.rgb
             rgb_map = rgb / 255.0
 
-            depth_m = frame.depth.copy()
+            depth_m = _depth_for_visualization(frame, realsense_intrinsics)
             depth_m[depth_m > 5.0] = 0.0
-            K = cam.intrinsics_matrix
+            # rs_infer_depth returns depth on the RGB grid, whose intrinsics
+            # are recorded in every Frame; no camera-specific property is
+            # needed here.
+            K = frame.intrinsics
             xyz_map = depth_to_xyz(depth_m, K)
 
             # Convert point cloud to world frame using camera transform

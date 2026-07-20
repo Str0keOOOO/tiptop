@@ -22,8 +22,32 @@ robot:
   time_dilation_factor: 0.2
 
   # Robot configurations
-  q_home: [-0.018473196, 0.087673544, -0.386803256, -0.018159204, 0.757174264, 0.025067028]
-  q_capture: [0.082667116, 0.694777076, -0.711872196, -0.060583012, 0.82571174, 0.088580632]
+  q_home: [0.100704212, 0.0, -0.25243212400000004, -0.10475122, 0.639270268, 0.11178115200000001]
+  q_capture: [0.054181064, 0.9935055760000001, -1.2180098560000001, 0.07541041200000001, 1.0413195800000001, -0.011146716000000001]
+
+  # Frame convention: A_from_B maps B-coordinate points into A.  The first
+  # three links are names in cobot_magic_right.urdf; the fixed base/TCP
+  # transform is read from that URDF rather than duplicated here.
+  frames:
+    base_link: "base_link"
+    gripper_base_link: "gripper_base"
+    tcp_link: "tool_center_point"
+    # rs_camera.py reprojects FoundationStereo IR depth onto the RGB pixel
+    # grid, so depth_to_xyz produces camera_color_optical_frame coordinates.
+    camera_frame: "camera_color_optical_frame"
+    # This is m2t2_grasp_from_tcp, not a Panda transform.  Its +0.1034 m
+    # translation comes from M2T2 action_decoder.build_6d_grasp()'s training
+    # gripper depth (raw M2T2 wrist origin -> contact midpoint).  The URDF
+    # independently defines gripper_base_from_tcp.  They are intentionally
+    # separate geometric facts even though both are 0.1034 m in this asset.
+    # Rotation was derived from documented axes: M2T2 X is closing, M2T2 Z is
+    # approach; Cobot TCP Y is closing and TCP Z is approach.
+    m2t2_grasp_from_tcp:
+      parent_frame: "m2t2_grasp"
+      child_frame: "tool_center_point"
+      convention: "parent_from_child"
+      translation: [0.0, 0.0, 0.1034]
+      quaternion_wxyz: [0.7071067811865476, 0.0, 0.0, -0.7071067811865475]
 
 # == Camera configurations ==
 # Supported types: zed, realsense, remote_realsense

@@ -10,7 +10,7 @@ import torch
 from jaxtyping import Float
 from scipy.spatial.transform import Rotation as R
 
-from tiptop.config import update_calibration_info
+from tiptop.config import tiptop_cfg, update_calibration_info
 from tiptop.perception.cameras import get_hand_camera
 from tiptop.perception.cameras.rs_camera import RealsenseIntrinsics
 from tiptop.perception.cameras.zed_camera import ZedIntrinsics
@@ -557,7 +557,14 @@ def _calibrate_wrist_camera(cam, client) -> None:
 
     # Save the calibration
     transformation = calibrator.calibrate(cam_id)
-    update_calibration_info(cam_id, transformation)
+    calibration_metadata = {}
+    if str(tiptop_cfg().robot.type) == "cobot_magic":
+        # MotionGen's ee_link is tool_center_point for Cobot.  Persist both
+        # frame names so future readers never infer the old gripper-base frame.
+        from tiptop.cobot_magic.frames import cobot_magic_calibration_metadata
+
+        calibration_metadata = cobot_magic_calibration_metadata()
+    update_calibration_info(cam_id, transformation, **calibration_metadata)
     _log.info(f"Updated calibration info for {cam_id}. Transformation: {transformation}")
 
 
