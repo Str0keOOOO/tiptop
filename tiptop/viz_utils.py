@@ -1,8 +1,10 @@
+from copy import deepcopy
 from functools import lru_cache
 
 import numpy as np
 import open3d as o3d
 from jaxtyping import Float
+from scipy.spatial.transform import Rotation
 
 # Turbo colormap lookup table - 256 RGB triplets in [0, 1] range
 # From: https://gist.github.com/mikhailov-work/ee72ba4191942acecc03fe6da94fc73f
@@ -349,3 +351,24 @@ def get_gripper_mesh(include_sphere: bool = True, radius: float = 0.001) -> o3d.
     else:
         gripper_mesh = left_finger + right_finger + top_ext + bar
     return gripper_mesh
+
+
+def get_gripper_mesh_in_tcp_frame(
+    robot_type: str,
+    include_sphere: bool = True,
+    radius: float = 0.001,
+) -> o3d.geometry.TriangleMesh:
+    """Return the visualization gripper expressed in the selected robot's TCP frame.
+
+    This changes only the display mesh. It must not be used to modify a grasp
+    pose, its TCP conversion, or a planner input.
+    """
+    mesh = deepcopy(get_gripper_mesh(include_sphere=include_sphere, radius=radius))
+    if robot_type == "cobot_magic":
+        # The generic mesh has Y as its closing direction and extends along
+        # +Z. Cobot's TCP preserves Y as closing direction but the gripper
+        # body is behind the TCP along -Z, so rotate only the mesh 180° about Y.
+        tcp_from_visual_gripper = np.eye(4, dtype=np.float64)
+        tcp_from_visual_gripper[:3, :3] = Rotation.from_euler("y", np.pi).as_matrix()
+        mesh.transform(tcp_from_visual_gripper)
+    return mesh

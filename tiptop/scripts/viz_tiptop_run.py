@@ -2,15 +2,13 @@ import json
 import logging
 import re
 from pathlib import Path
+
 import cv2
 import dill
-import open3d as o3d
 import numpy as np
+import open3d as o3d
 import rerun as rr
 import torch
-from PIL import Image
-from omegaconf import OmegaConf
-
 from curobo.types.base import TensorDeviceType
 from cutamp.envs.utils import TAMPEnvironment
 from cutamp.robots import load_robot_container
@@ -21,18 +19,21 @@ from cutamp.robots.cobot_magic import (
 )
 from cutamp.robots.utils import RerunRobot
 from cutamp.utils.common import pose_list_to_mat4x4
-from cutamp.utils.rerun_utils import log_curobo_pose_to_rerun, curobo_to_rerun, log_curobo_mesh_to_rerun
+from cutamp.utils.rerun_utils import curobo_to_rerun, log_curobo_mesh_to_rerun, log_curobo_pose_to_rerun
+from omegaconf import OmegaConf
+from PIL import Image
+
 from tiptop.perception.m2t2 import m2t2_grasp_from_tcp
 from tiptop.planning import load_tiptop_plan
 from tiptop.utils import get_robot_rerun, setup_logging
-from tiptop.viz_utils import get_heatmap, get_gripper_mesh
+from tiptop.viz_utils import get_gripper_mesh_in_tcp_frame, get_heatmap
 
 _log = logging.getLogger(__name__)
 
 
 def viz_grasps(grasps, num_grasps_per_object: int, robot_type: str):
     """Visualize grasps"""
-    gripper_mesh = get_gripper_mesh()
+    gripper_mesh = get_gripper_mesh_in_tcp_frame(robot_type=robot_type)
     vertices = np.asarray(gripper_mesh.vertices)
     vertices_hom = np.c_[vertices, np.ones(len(vertices))]  # Add homogeneous coordinate
     faces = np.asarray(gripper_mesh.triangles)
@@ -170,15 +171,24 @@ def viz_tiptop_run(
     robot_rr = get_robot_rerun(robot_type=robot_type)
     robot_rr.set_joint_positions(metadata["observation"]["q_at_capture"])
 
-    # Log camera and RGB
+    # Log the camera hierarchy so all 2D overlays are valid Pinhole children
+    # and can be projected in a 3D Rerun view.
     world_from_cam = np.array(metadata["observation"]["world_from_cam"])
-    rr.log("cam", rr.Transform3D(mat3x3=world_from_cam[:3, :3], translation=world_from_cam[:3, 3]), static=True)
     with open(perception_dir / "intrinsics.json", "r") as f:
         intrinsics = json.load(f)
     K = np.array(intrinsics["intrinsics"])
-    rr.log("cam", rr.Pinhole(image_from_camera=K), static=True)
     rgb = Image.open(run_dir / "rgb.png")
-    rr.log("cam/rgb", rr.Image(rgb), static=True)
+    rr.log(
+        "world/camera",
+        rr.Transform3D(mat3x3=world_from_cam[:3, :3], translation=world_from_cam[:3, 3]),
+        static=True,
+    )
+    rr.log(
+        "world/camera",
+        rr.Pinhole(image_from_camera=K, resolution=rgb.size, camera_xyz=rr.ViewCoordinates.RDF),
+        static=True,
+    )
+    rr.log("world/camera/rgb", rr.Image(rgb), static=True)
 
     # Mask out depth where gripper is present
     depth = cv2.imread(str(perception_dir / "depth.png"), cv2.IMREAD_UNCHANGED)
@@ -188,17 +198,17 @@ def viz_tiptop_run(
         depth[gripper_mask == 255] = 0
     else:
         _log.warning("Gripper mask not found, using full depth")
-    rr.log("cam/depth", rr.DepthImage(depth, meter=1000.0), static=True)
+    rr.log("world/camera/depth", rr.DepthImage(depth, meter=1000.0), static=True)
 
     # Bounding boxes and mask visualization
     bboxes_viz = Image.open(run_dir / "bboxes_viz.png")
     masks_viz = Image.open(run_dir / "masks_viz.png")
-    rr.log("bboxes_viz", rr.Image(bboxes_viz), static=True)
-    rr.log("masks_viz", rr.Image(masks_viz), static=True)
+    rr.log("world/camera/bboxes", rr.Image(bboxes_viz), static=True)
+    rr.log("world/camera/masks", rr.Image(masks_viz), static=True)
 
     # Point cloud
     pcd = o3d.io.read_point_cloud(perception_dir / "pointcloud.ply")
-    rr.log("pcd", rr.Points3D(positions=pcd.points, colors=pcd.colors), static=True)
+    rr.log("world/pointcloud", rr.Points3D(positions=pcd.points, colors=pcd.colors), static=True)
 
     # Grasps
     if visualize_grasps:

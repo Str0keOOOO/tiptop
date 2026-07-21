@@ -89,13 +89,14 @@ def run_tiptop(
 
     ik_solver, motion_gen, _ = build_curobo_solvers(num_particles, config.coll_n_spheres, include_workspace=False)
 
-    rr.init("tiptop_run", spawn=rr_spawn)
-    robot_rr = get_robot_rerun()
-    robot_rr.set_joint_positions(observation.q_init)
-
     timestamp = datetime.now()
     save_dir = Path(output_dir) / timestamp.strftime("%Y-%m-%d_%H-%M-%S")
     save_dir.mkdir(parents=True, exist_ok=True)
+    rr.init("tiptop_run", spawn=rr_spawn)
+    rr.save(save_dir / "tiptop_run.rrd")
+    _log.info("Saving Rerun stream to %s", save_dir / "tiptop_run.rrd")
+    robot_rr = get_robot_rerun()
+    robot_rr.set_joint_positions(observation.q_init)
     file_handler = add_file_handler(save_dir / "tiptop_run.log")
 
     try:
