@@ -9,7 +9,7 @@ if [ ! -f "tiptop/__init__.py" ]; then
     exit 1
 fi
 
-REPO_URL="https://github.com/Str0keOOOO/curobo"
+REPO_URL="https://github.com/williamshen-nz/curobo.git"
 INSTALL_DIR="curobo"
 
 echo "==> Installing curobo..."

@@ -77,7 +77,7 @@ perception:
   # VLM contract: image + full TiPToP prompt -> generated text.
   # The service must accept multipart ``image`` and ``prompt`` fields.
   vlm:
-    url: "http://localhost:8015"
+    url: "http://localhost:8011"
     endpoint: "/generate"
     timeout_seconds: 120
 

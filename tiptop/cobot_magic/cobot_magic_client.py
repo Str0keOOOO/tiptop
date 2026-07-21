@@ -10,38 +10,11 @@ import numpy as np
 from tiptop.cobot_magic.rpc_client import ZmqRpcClient
 
 
-# These are the active Cobot Magic controller software limits, in joint order.
-# They match the Piper SDK joint ranges and must stay aligned with the controller.
-_COBOT_MAGIC_JOINT_NAMES = ("joint1", "joint2", "joint3", "joint4", "joint5", "joint6")
-_COBOT_MAGIC_JOINT_LOWER_LIMITS = np.array([-2.6179938, 0.0, -2.9670597, -1.7453292, -1.3, -2.0943951])
-_COBOT_MAGIC_JOINT_UPPER_LIMITS = np.array([2.6179938, 3.1415926, 0.0, 1.7453292, 1.3, 2.0943951])
-
-
 def _normalized_unit_interval(value: float, name: str) -> float:
     value = float(value)
     if not np.isfinite(value) or not 0.0 <= value <= 1.0:
         raise ValueError(f"{name} must be a finite value in [0, 1], got {value}")
     return value
-
-
-def _validate_cobot_magic_trajectory_limits(joint_confs: np.ndarray, dof: int) -> None:
-    """Reject a trajectory locally before the controller can partially execute it."""
-    if dof != len(_COBOT_MAGIC_JOINT_NAMES):
-        return
-
-    violations = (joint_confs < _COBOT_MAGIC_JOINT_LOWER_LIMITS) | (joint_confs > _COBOT_MAGIC_JOINT_UPPER_LIMITS)
-    if not np.any(violations):
-        return
-
-    waypoint, joint_idx = np.argwhere(violations)[0]
-    joint_name = _COBOT_MAGIC_JOINT_NAMES[joint_idx]
-    value = joint_confs[waypoint, joint_idx]
-    lower = _COBOT_MAGIC_JOINT_LOWER_LIMITS[joint_idx]
-    upper = _COBOT_MAGIC_JOINT_UPPER_LIMITS[joint_idx]
-    raise ValueError(
-        "Trajectory violates configured Cobot Magic joint limits before execution: "
-        f"waypoint={waypoint}, {joint_name}={value:.6f}, allowed=[{lower:.6f}, {upper:.6f}]"
-    )
 
 
 class CobotMagicClient(ZmqRpcClient):
@@ -132,8 +105,6 @@ class CobotMagicClient(ZmqRpcClient):
                 raise ValueError("Trajectory contains non-finite joint velocities")
             if not np.all(np.isfinite(durations_array)) or np.any(durations_array <= 0.0):
                 raise ValueError("Trajectory durations must be finite and positive")
-            # _validate_cobot_magic_trajectory_limits(joint_confs_array, self.dof)
-
             result = self._request(
                 "execute_joint_impedance_path",
                 {
