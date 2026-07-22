@@ -667,7 +667,12 @@ async def async_entrypoint(container: _DemoContainer, config: TAMPConfiguration,
                     _log.exception("TiPToP run failed")
                     raise
                 finally:
-                    # Always remove the file handler after the run
+                    try:
+                        rrd_path = save_dir / "tiptop_run.rrd"
+                        rr.save(rrd_path)
+                        _log.info(f"Saved Rerun recording to {rrd_path}")
+                    except Exception:
+                        _log.exception("Failed to save Rerun recording")
                     remove_file_handler(file_handler)
             except (UserExitException, KeyboardInterrupt) as e:
                 if isinstance(e, KeyboardInterrupt):

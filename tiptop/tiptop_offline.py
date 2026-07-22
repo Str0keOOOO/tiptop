@@ -158,6 +158,12 @@ def run_tiptop(
         _log.info(f"Saved outputs to {save_dir}")
     finally:
         remove_file_handler(file_handler)
+        try:
+            rrd_path = save_dir / "tiptop_run.rrd"
+            rr.save(rrd_path)
+            _log.info(f"Saved Rerun recording to {rrd_path}")
+        except Exception:
+            _log.exception("Failed to save Rerun recording")
         rr.disconnect()
 
 
@@ -415,4 +421,3 @@ def rerun_entrypoint():
         os._exit(1)
     else:
         os._exit(0)
-
