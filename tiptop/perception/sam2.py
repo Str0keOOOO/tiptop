@@ -121,11 +121,11 @@ def sam2_segment_objects(
     rgb_pil: Image.Image,
     detection_results: list[dict],
 ) -> Float[np.ndarray, "n 1 h w"]:
-    """Segment detection results from Gemini with SAM2.
+    """Segment OmniGround detection results with SAM2.
 
     Args:
         rgb_pil: PIL Image to segment.
-        detection_results: List of detection dicts from Gemini, each with a 'box_2d' key
+        detection_results: List of detection dicts from OmniGround, each with a 'box_2d' key
                            in [ymin, xmin, ymax, xmax] format normalized to 0-1000.
 
     Returns:
@@ -134,7 +134,7 @@ def sam2_segment_objects(
     cfg = tiptop_cfg()
     mode = cfg.perception.sam.mode
 
-    # Convert Gemini bbox format [ymin, xmin, ymax, xmax] (0-1000) to SAM2 [x0, y0, x1, y1] (pixels)
+    # Convert OmniGround bbox format [ymin, xmin, ymax, xmax] (0-1000) to SAM2 [x0, y0, x1, y1] (pixels)
     img_height, img_width = rgb_pil.height, rgb_pil.width
     boxes = np.array([
         [

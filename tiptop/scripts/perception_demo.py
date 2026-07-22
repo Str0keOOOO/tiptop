@@ -6,7 +6,7 @@ import numpy as np
 import open3d as o3d
 import rerun as rr
 from curobo.types.base import TensorDeviceType
-from cutamp.robots import load_fr3_robotiq_container, load_ur5_container
+from cutamp.robots import load_cobot_magic_container, load_fr3_robotiq_container, load_ur5_container
 
 from tiptop.config import load_calibration, tiptop_cfg
 from tiptop.perception.cameras import (
@@ -33,6 +33,8 @@ async def _run_demo(num_grasps_per_object: int):
             robot_container = load_fr3_robotiq_container(tensor_args)
         elif cfg.robot.type == "ur5":
             robot_container = load_ur5_container(tensor_args)
+        elif cfg.robot.type == "cobot_magic":
+            robot_container = load_cobot_magic_container(tensor_args)
         else:
             raise ValueError(f"Unknown robot type: {cfg.robot.type}")
 

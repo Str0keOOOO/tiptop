@@ -52,6 +52,12 @@ _ROBOT_EMBODIMENTS = [
         "gripper": "Franka default hand",
         "wrist_camera_spheres": "Not modeled",
     },
+    {
+        "name": "cobot_magic",
+        "robot": "AgileX Cobot Magic",
+        "gripper": "Cobot Magic bridge",
+        "wrist_camera_spheres": "Included (Cobot Magic asset)",
+    },
 ]
 
 _EMBODIMENT_NAMES = [e["name"] for e in _ROBOT_EMBODIMENTS]
@@ -91,15 +97,36 @@ def prompt_robot_type(current_value: str) -> str:
 
 
 def prompt_camera_type(current_value: str) -> str:
-    """Prompt user to select camera type (zed or realsense), defaulting to zed."""
-    default = current_value if current_value in ("zed", "realsense") else "zed"
+    """Prompt user to select local or Cobot Magic remote camera type."""
+    camera_types = ("zed", "realsense", "remote_realsense")
+    default = current_value if current_value in camera_types else "zed"
     while True:
-        user_input = input(f"Camera type (zed/realsense) [{default}]: ").strip().lower()
+        user_input = input(f"Camera type (zed/realsense/remote_realsense) [{default}]: ").strip().lower()
         if not user_input:
             return default
-        if user_input in ("zed", "realsense"):
+        if user_input in camera_types:
             return user_input
-        print("  ⚠️  Please enter 'zed' or 'realsense'.")
+        print("  ⚠️  Please enter zed, realsense, or remote_realsense.")
+
+
+def configure_remote_camera(camera_config, camera_name: str) -> None:
+    """Configure the local end of one Cobot Magic camera SSH tunnel."""
+    camera_config["camera_host"] = prompt_with_default(
+        f"{camera_name} camera tunnel host",
+        str(camera_config.get("camera_host", "127.0.0.1")),
+    )
+    camera_config["camera_port"] = int(
+        prompt_with_default(
+            f"{camera_name} camera tunnel port",
+            str(camera_config.get("camera_port", 15556)),
+        )
+    )
+    camera_config["request_timeout_ms"] = int(
+        prompt_with_default(
+            f"{camera_name} camera RPC timeout (ms)",
+            str(camera_config.get("request_timeout_ms", 30000)),
+        )
+    )
 
 
 def entrypoint():
@@ -127,22 +154,37 @@ def entrypoint():
     print("\n🦾 Robot Configuration")
     print("-" * 60)
 
-    config["robot"]["type"] = prompt_robot_type(config["robot"]["type"])
-
-    # Check if host needs updating
-    current_host = config["robot"]["host"]
-    needs_host = current_host in ["your-ip-address", "localhost", ""]
-    print("IP address of workstation running Bamboo controller (NUC in original DROID setup)")
-    print("💡 Tip: Run `ifconfig` on that machine to find its IP address")
-    config["robot"]["host"] = prompt_with_default(
-        "Robot host",
-        current_host,
-        allow_skip=not needs_host,
-    )
-
-    print("💡 Only change ports if you used --control_port or --gripper_port with RunBambooController")
-    config["robot"]["port"] = int(prompt_with_default("Robot port", str(config["robot"]["port"])))
-    config["robot"]["gripper_port"] = int(prompt_with_default("Gripper port", str(config["robot"]["gripper_port"])))
+    robot_config = config["robot"]
+    robot_config["type"] = prompt_robot_type(robot_config["type"])
+    if robot_config["type"] == "cobot_magic":
+        robot_config["dof"] = 6
+        print("Configure the GPU-side SSH tunnel to Cobot Magic's controller bridge.")
+        robot_config["controller_host"] = prompt_with_default(
+            "Controller tunnel host",
+            str(robot_config.get("controller_host", "127.0.0.1")),
+        )
+        robot_config["controller_port"] = int(
+            prompt_with_default("Controller tunnel port", str(robot_config.get("controller_port", 15555)))
+        )
+        robot_config["request_timeout_ms"] = int(
+            prompt_with_default("Controller RPC timeout (ms)", str(robot_config.get("request_timeout_ms", 30000)))
+        )
+        robot_config["trajectory_timeout_ms"] = int(
+            prompt_with_default(
+                "Trajectory RPC timeout (ms)", str(robot_config.get("trajectory_timeout_ms", 300000))
+            )
+        )
+    else:
+        current_host = str(robot_config.get("host", ""))
+        needs_host = current_host in ["your-ip-address", "localhost", ""]
+        print("IP address of workstation running Bamboo controller (NUC in original DROID setup)")
+        print("💡 Tip: Run `ifconfig` on that machine to find its IP address")
+        robot_config["host"] = prompt_with_default("Robot host", current_host, allow_skip=not needs_host)
+        print("💡 Only change ports if you used --control_port or --gripper_port with RunBambooController")
+        robot_config["port"] = int(prompt_with_default("Robot port", str(robot_config.get("port", 5555))))
+        robot_config["gripper_port"] = int(
+            prompt_with_default("Gripper port", str(robot_config.get("gripper_port", 5559)))
+        )
 
     # Camera configuration
     print("\n📷 Camera Configuration")
@@ -162,6 +204,8 @@ def entrypoint():
     config["cameras"]["hand"]["serial"] = prompt_with_default(
         "Hand camera serial number", current_hand, allow_skip=not needs_hand
     )
+    if hand_type == "remote_realsense":
+        configure_remote_camera(config["cameras"]["hand"], "Hand")
 
     # External camera is truly optional
     print("\nExternal camera (optional)")
@@ -187,6 +231,8 @@ def entrypoint():
         config["cameras"]["external"]["serial"] = prompt_with_default(
             "External camera serial number (optional)", current_external
         )
+    if ext_type == "remote_realsense":
+        configure_remote_camera(config["cameras"]["external"], "External")
 
     # Perception services
     print("\n🧠 Perception Services")
@@ -195,7 +241,33 @@ def entrypoint():
     config["perception"]["foundation_stereo"]["url"] = prompt_with_default(
         "FoundationStereo URL", config["perception"]["foundation_stereo"]["url"]
     )
-    config["perception"]["m2t2"]["url"] = prompt_with_default("M2T2 URL", config["perception"]["m2t2"]["url"])
+    config["perception"]["m2t2"]["url"] = prompt_with_default(
+        "M2T2 URL", config["perception"]["m2t2"]["url"]
+    )
+    omniground_config = config["perception"].setdefault("omniground", {})
+    omniground_config["url"] = prompt_with_default(
+        "OmniGround URL", str(omniground_config.get("url", "http://127.0.0.1:8011"))
+    )
+    endpoint = prompt_with_default(
+        "OmniGround endpoint (/generate or /v1/generate)",
+        str(omniground_config.get("endpoint", "/generate")),
+    )
+    if endpoint not in ("/generate", "/v1/generate"):
+        raise ValueError("OmniGround endpoint must be /generate or /v1/generate")
+    omniground_config["endpoint"] = endpoint
+    omniground_config["model_id"] = prompt_with_default(
+        "OmniGround model_id", str(omniground_config.get("model_id", "")), allow_skip=False
+    )
+    omniground_config["timeout_seconds"] = float(
+        prompt_with_default("OmniGround timeout (seconds)", str(omniground_config.get("timeout_seconds", 120)))
+    )
+    current_temperature = omniground_config.get("temperature")
+    temperature_default = "" if current_temperature is None else str(current_temperature)
+    temperature_input = input(
+        "OmniGround temperature (blank for server default) "
+        f"[{temperature_default}]: "
+    ).strip()
+    omniground_config["temperature"] = None if not temperature_input else float(temperature_input)
 
     # Write back to file
     print(f"\n💾 Saving configuration to: {config_path}")

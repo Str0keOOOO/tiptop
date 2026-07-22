@@ -83,7 +83,7 @@ See [Troubleshooting](#troubleshooting) to debug any problems you may have.
 TiPToP sends grounding requests to OmniGround before calibration or demos. Start the configured OmniGround service first.
 ```
 
-Set `perception.vlm.url`, `endpoint` (`/generate` or `/v1/generate`), required `model_id`, optional `temperature`, and `timeout_seconds`. TiPToP posts multipart form data with a PNG `image`, the complete `prompt`, and `model_id`. OmniGround returns the direct JSON object `{"bboxes": [...], "predicates": [...]}`; text wrappers and Markdown code fences are rejected.
+Set `perception.omniground.url`, `endpoint` (`/generate` or `/v1/generate`), required `model_id`, optional `temperature`, and `timeout_seconds`. TiPToP posts multipart form data with a PNG `image`, the complete `prompt`, and `model_id`. OmniGround returns the direct JSON object `{"bboxes": [...], "predicates": [...]}`; text wrappers and Markdown code fences are rejected.
 
 For a Cobot Magic upper computer and its remote RealSense bridge, see [Cobot Magic Remote Runtime](cobot-magic.md).
 
@@ -191,7 +191,7 @@ You should re-calibrate the camera if it has been knocked by any objects or obst
 
 ### Compute the gripper mask
 
-We compute a gripper mask to remove any depth predictions of the gripper from the projected point cloud. This uses the configured VLM to detect the gripper, so make sure the VLM service is available. Run:
+We compute a gripper mask to remove any depth predictions of the gripper from the projected point cloud. This uses configured OmniGround to detect the gripper, so make sure the service is available. Run:
 
 ```bash
 compute-gripper-mask

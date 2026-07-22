@@ -11,7 +11,6 @@ from curobo.geom.types import WorldConfig
 from curobo.types.math import Pose
 from curobo.types.state import JointState
 from curobo.wrap.reacher.motion_gen import MotionGenPlanConfig
-from cv2 import aruco
 from jaxtyping import Float
 from scipy.spatial.transform import Rotation as R
 
@@ -23,29 +22,21 @@ from tiptop.perception.cameras.zed_camera import ZedIntrinsics
 from tiptop.utils import get_robot_client, setup_logging
 from tiptop.workspace import workspace_cuboids
 
-# Charuco Board Params #
-CHARUCOBOARD_ROWCOUNT = SQUARES_Y = 9
-CHARUCOBOARD_COLCOUNT = SQUARES_X = 14
-CHARUCOBOARD_CHECKER_SIZE = 0.020
-# CHARUCOBOARD_MARKER_SIZE = 0.016
-CHARUCOBOARD_MARKER_SIZE = 0.015
-ARUCO_DICT = aruco.getPredefinedDictionary(aruco.DICT_5X5_100)
-
-# Create Board #
-CHARUCO_BOARD = aruco.CharucoBoard(
-    size=(SQUARES_X, SQUARES_Y),
-    squareLength=CHARUCOBOARD_CHECKER_SIZE,
-    markerLength=CHARUCOBOARD_MARKER_SIZE,
-    dictionary=ARUCO_DICT,
+# DFVision Q12-200-15: 12 x 9 squares with 15 mm square spacing.
+CHECKERBOARD_SQUARES_X = 12
+CHECKERBOARD_SQUARES_Y = 9
+CHECKERBOARD_INNER_CORNERS = (CHECKERBOARD_SQUARES_X - 1, CHECKERBOARD_SQUARES_Y - 1)
+CHECKERBOARD_SQUARE_SIZE_M = 0.015
+CHECKERBOARD_OBJECT_POINTS = np.zeros(
+    (CHECKERBOARD_INNER_CORNERS[0] * CHECKERBOARD_INNER_CORNERS[1], 3), dtype=np.float32
 )
-
-# Detector Params
-detector_params = cv2.aruco.DetectorParameters()
-detector_params.cornerRefinementMethod = cv2.aruco.CORNER_REFINE_SUBPIX
-calib_flags = cv2.CALIB_USE_INTRINSIC_GUESS + cv2.CALIB_FIX_PRINCIPAL_POINT + cv2.CALIB_FIX_FOCAL_LENGTH
-
-charuco_params = aruco.CharucoParameters()
-charuco_params.tryRefineMarkers = True
+CHECKERBOARD_OBJECT_POINTS[:, :2] = (
+    np.mgrid[0 : CHECKERBOARD_INNER_CORNERS[0], 0 : CHECKERBOARD_INNER_CORNERS[1]]
+    .T.reshape(-1, 2)
+    .astype(np.float32)
+    * CHECKERBOARD_SQUARE_SIZE_M
+)
+CHECKERBOARD_DETECTION_FLAGS = cv2.CALIB_CB_EXHAUSTIVE | cv2.CALIB_CB_ACCURACY
 
 
 _log = logging.getLogger(__name__)
@@ -98,14 +89,14 @@ def calibration_traj(t, pos_scale=0.1, angle_scale=0.2, hand_camera=False):
     return value
 
 
-class CharucoDetector:
+class CheckerboardDetector:
     def __init__(
         self,
         intrinsics_dict,
         inlier_error_threshold=3.0,
         reprojection_error_threshold=3.0,
         num_img_threshold=10,
-        num_corner_threshold=10,
+        num_corner_threshold=len(CHECKERBOARD_OBJECT_POINTS),
     ):
         # Set Parameters
         self.inlier_error_threshold = inlier_error_threshold
@@ -127,46 +118,13 @@ class CharucoDetector:
             raise ValueError
         img_size = image.shape[:2]
 
-        # Find Aruco Markers In Image #
-        detector = aruco.ArucoDetector(ARUCO_DICT, detectorParams=detector_params)
-
-        # corners, ids, rejected = aruco.detectMarkers(image=gray, dictionary=ARUCO_DICT, parameters=detector_params)
-        corners, ids, rejected = detector.detectMarkers(image=gray)
-
-        if isinstance(self._intrinsics_dict, RealsenseIntrinsics):
-            cameraMatrix = self._intrinsics_dict.K_color
-            distCoeffs = self._intrinsics_dict.distortion_color
-        elif isinstance(self._intrinsics_dict, ZedIntrinsics):
-            cameraMatrix = self._intrinsics_dict.K_left
-            distCoeffs = self._intrinsics_dict.distortion_left
-        else:
-            raise NotImplementedError
-
-        corners, ids, _, _ = detector.refineDetectedMarkers(
-            gray,
-            CHARUCO_BOARD,
-            corners,
-            ids,
-            rejected,
-            cameraMatrix,
-            distCoeffs,
+        found, corners = cv2.findChessboardCornersSB(
+            gray, CHECKERBOARD_INNER_CORNERS, flags=CHECKERBOARD_DETECTION_FLAGS
         )
-
-        # Find Charuco Corners #
-        if len(corners) == 0:
+        if not found or corners is None or len(corners) < self.num_corner_threshold:
             return None
 
-        charuco_detector = aruco.CharucoDetector(CHARUCO_BOARD, charuco_params, detector_params)
-        # num_corners_found, charuco_corners, charuco_ids = detector.interpolateCornersCharuco(
-        #     markerCorners=corners, markerIds=ids, image=gray, board=CHARUCO_BOARD, **self.intrinsic_params
-        # )
-        charuco_corners, charuco_ids, marker_corners, marker_ids = charuco_detector.detectBoard(gray)
-
-        num_corners_found = len(charuco_corners) if charuco_corners is not None else 0
-        if num_corners_found < self.num_corner_threshold:
-            return None
-
-        return corners, charuco_corners, charuco_ids, img_size
+        return np.ascontiguousarray(corners, dtype=np.float32), img_size
 
     def add_sample(self, cam_id, image, pose):
         readings = self.process_image(image)
@@ -176,35 +134,9 @@ class CharucoDetector:
         self._pose_dict[cam_id].append(pose)
 
     def calculate_target_to_cam(self, readings, train=True):
-        init_corners_all = []  # Corners discovered in all images processed
-        init_ids_all = []  # Aruco ids corresponding to corners discovered
-        fixed_image_size = readings[0][3]
-
-        # Proccess Readings #
-        init_successes = []
-        for i in range(len(readings)):
-            corners, charuco_corners, charuco_ids, img_size = readings[i]
-            assert img_size == fixed_image_size
-            init_corners_all.append(charuco_corners)
-            init_ids_all.append(charuco_ids)
-            init_successes.append(i)
-
-        # First Pass: Find Outliers #
         threshold = self.num_img_threshold if train else 5
-        if len(init_successes) < threshold:
+        if len(readings) < threshold:
             return None
-        # print('Not enough points round 1')
-        # print('Num Points: ', len(init_successes))
-        # return None
-
-        obj_points_all, img_points_all = [], []
-        for corners, ids in zip(init_corners_all, init_ids_all):
-            objPoints, imgPoints = CHARUCO_BOARD.matchImagePoints(corners, ids)
-            obj_points_all.append(objPoints)
-            img_points_all.append(imgPoints)
-
-        # cameraMatrix = self._intrinsics_dict[self._curr_cam_id]["cameraMatrix"]
-        # distCoeffs = self._intrinsics_dict[self._curr_cam_id]["distCoeffs"]
         if isinstance(self._intrinsics_dict, RealsenseIntrinsics):
             cameraMatrix = self._intrinsics_dict.K_color
             distCoeffs = self._intrinsics_dict.distortion_color
@@ -213,74 +145,29 @@ class CharucoDetector:
             distCoeffs = self._intrinsics_dict.distortion_left
         else:
             raise NotImplementedError
-
-        obj_points_flat = np.vstack(obj_points_all)
-        img_points_flat = np.vstack(img_points_all)
-        assert obj_points_flat.shape[1] == img_points_flat.shape[1] == 1
-        # img_points_flat = img_points_flat[:, 0]
-
-        calibration_error, cameraMatrix, distCoeffs, rvecs, tvecs, stdIntrinsics, stdExtrinsics, perViewErrors = (
-            cv2.calibrateCameraExtended(
-                objectPoints=obj_points_all,
-                imagePoints=img_points_all,
-                imageSize=fixed_image_size,
-                cameraMatrix=cameraMatrix,
-                distCoeffs=distCoeffs,
-                flags=calib_flags,
+        rmats, tvecs, successes = [], [], []
+        for i, (corners, _) in enumerate(readings):
+            solved, rvec, tvec = cv2.solvePnP(
+                CHECKERBOARD_OBJECT_POINTS, corners, cameraMatrix, distCoeffs, flags=cv2.SOLVEPNP_ITERATIVE
             )
-        )
+            if not solved:
+                continue
+            projected, _ = cv2.projectPoints(CHECKERBOARD_OBJECT_POINTS, rvec, tvec, cameraMatrix, distCoeffs)
+            reprojection_error = float(np.sqrt(np.mean((corners - projected) ** 2)))
+            if reprojection_error > self.inlier_error_threshold:
+                continue
+            rmats.append(R.from_rotvec(rvec.flatten()).as_matrix())
+            tvecs.append(tvec.flatten())
+            successes.append(i)
 
-        # Remove Outliers #
-        threshold = self.num_img_threshold if train else 5
-        final_corners_all = [
-            init_corners_all[i] for i in range(len(perViewErrors)) if perViewErrors[i] <= self.inlier_error_threshold
-        ]
-        final_ids_all = [
-            init_ids_all[i] for i in range(len(perViewErrors)) if perViewErrors[i] <= self.inlier_error_threshold
-        ]
-        final_successes = [
-            init_successes[i] for i in range(len(perViewErrors)) if perViewErrors[i] <= self.inlier_error_threshold
-        ]
-        if len(final_successes) < threshold:
+        if len(successes) < threshold:
             return None
-        # print('Not enough points round 2')
-        # print('Num Points: ', len(final_successes))
-        # print('Error Mean: ', perViewErrors.mean())
-        # print('Error Std: ', perViewErrors.std())
-        # return None
+        return rmats, tvecs, successes
 
-        # Second Pass: Calculate Finalized Extrinsics #
-        final_obj_points_all, final_img_points_all = [], []
-        for corners, ids in zip(final_corners_all, final_ids_all):
-            objPoints, imgPoints = CHARUCO_BOARD.matchImagePoints(corners, ids)
-            final_obj_points_all.append(objPoints)
-            final_img_points_all.append(imgPoints)
-
-        calibration_error, cameraMatrix, distCoeffs, rvecs, tvecs = cv2.calibrateCamera(
-            objectPoints=final_obj_points_all,
-            imagePoints=final_img_points_all,
-            imageSize=fixed_image_size,
-            cameraMatrix=cameraMatrix,
-            distCoeffs=distCoeffs,
-            flags=calib_flags,
-        )
-
-        # Return Transformation #
-        if calibration_error > self.reprojection_error_threshold:
-            return None
-        # print('Failed Calibration Threshold')
-        # print('Calibration Error: ', calibration_error)
-        # return None
-
-        rmats = [R.from_rotvec(rvec.flatten()).as_matrix() for rvec in rvecs]
-        tvecs = [tvec.flatten() for tvec in tvecs]
-
-        return rmats, tvecs, final_successes
-
-    def augment_image(self, cam_id, image, visualize=False, visual_type=["markers", "axes"]):
+    def augment_image(self, cam_id, image, visualize=False, visual_type=["corners", "axes"]):
         if type(visual_type) != list:
             visual_type = [visual_type]
-        assert all([t in ["markers", "charuco", "axes"] for t in visual_type])
+        assert all([t in ["corners", "axes"] for t in visual_type])
         if image.shape[2] == 4:
             image = cv2.cvtColor(image, cv2.COLOR_BGRA2BGR)
         self._curr_cam_id = cam_id
@@ -290,26 +177,15 @@ class CharucoDetector:
 
         if readings is None:
             if visualize:
-                cv2.imshow("Charuco board: {0}".format(cam_id), image)
+                cv2.imshow("Checkerboard: {0}".format(cam_id), image)
                 cv2.waitKey(20)
             return image
 
-        corners, charuco_corners, charuco_ids, image_size = readings
-
-        # Outline the aruco markers found in our query image
-        if "markers" in visual_type:
-            image = aruco.drawDetectedMarkers(image=image, corners=corners)
-
-        # Draw the Charuco board we've detected to show our calibrator the board was properly detected
-        if "charuco" in visual_type:
-            image = aruco.drawDetectedCornersCharuco(
-                image=image, charucoCorners=charuco_corners, charucoIds=charuco_ids
-            )
+        corners, _ = readings
+        if "corners" in visual_type:
+            cv2.drawChessboardCorners(image, CHECKERBOARD_INNER_CORNERS, corners, True)
 
         if "axes" in visual_type:
-            objPoints, imgPoints = CHARUCO_BOARD.matchImagePoints(charuco_corners, charuco_ids)
-            # cameraMatrix = self._intrinsics_dict[self._curr_cam_id]["cameraMatrix"]
-            # distCoeffs = self._intrinsics_dict[self._curr_cam_id]["distCoeffs"]
             if isinstance(self._intrinsics_dict, RealsenseIntrinsics):
                 cameraMatrix = self._intrinsics_dict.K_color
                 distCoeffs = self._intrinsics_dict.distortion_color
@@ -318,27 +194,19 @@ class CharucoDetector:
                 distCoeffs = self._intrinsics_dict.distortion_left
             else:
                 raise NotImplementedError
-            validPose, rvec, tvec = cv2.solvePnP(objPoints, imgPoints, cameraMatrix, distCoeffs)
-            cv2.drawFrameAxes(image, cameraMatrix, distCoeffs, rvec, tvec, 0.1)
-            # calibration_error, cameraMatrix, distCoeffs, rvecs, tvecs = aruco.calibrateCameraCharuco(
-            #     charucoCorners=[charuco_corners],
-            #     charucoIds=[charuco_ids],
-            #     board=CHARUCO_BOARD,
-            #     imageSize=image_size,
-            #     flags=calib_flags,
-            #     **self._intrinsics_dict[self._curr_cam_id],
-            # )
-            # cv2.drawFrameAxes(image, cameraMatrix, distCoeffs, rvecs[0], tvecs[0], 0.1)
+            solved, rvec, tvec = cv2.solvePnP(CHECKERBOARD_OBJECT_POINTS, corners, cameraMatrix, distCoeffs)
+            if solved:
+                cv2.drawFrameAxes(image, cameraMatrix, distCoeffs, rvec, tvec, 0.1)
 
         # Visualize
         if visualize:
-            cv2.imshow("Charuco board: {0}".format(cam_id), image)
+            cv2.imshow("Checkerboard: {0}".format(cam_id), image)
             cv2.waitKey(20)
 
         return image
 
 
-class HandCameraCalibrator(CharucoDetector):
+class HandCameraCalibrator(CheckerboardDetector):
     def __init__(self, camera, lin_error_threshold=1e-3, rot_error_threshold=1e-2, train_percentage=0.7, **kwargs):
         self.lin_error_threshold = lin_error_threshold
         self.rot_error_threshold = rot_error_threshold
@@ -473,7 +341,15 @@ class HandCameraCalibrator(CharucoDetector):
 
         # Split Into Train / Test #
         readings = self._readings_dict[cam_id]
-        if len(readings) == 0:
+        min_train = int(np.ceil(self.num_img_threshold / self.train_percentage))
+        min_test = int(np.ceil(5 / (1 - self.train_percentage)))
+        min_samples = max(min_train, min_test)
+        if len(readings) < min_samples:
+            _log.warning(
+                "Calibration validation needs at least %d valid checkerboard samples; collected %d",
+                min_samples,
+                len(readings),
+            )
             return False
         poses = np.array(self._pose_dict[cam_id])
         ind = np.random.choice(len(readings), size=len(readings), replace=False)
@@ -487,6 +363,9 @@ class HandCameraCalibrator(CharucoDetector):
         # Calculate Approximate Gripper2Base Transformations #
         results = self._calculate_gripper_to_base(train_readings, train_poses, eval_readings=test_readings)
         if results is None:
+            _log.warning(
+                "Calibration validation could not fit the checkerboard observations after reprojection-error filtering"
+            )
             return False
         approx_poses, successes = results
         test_poses = np.array(test_poses)[successes]
@@ -500,9 +379,14 @@ class HandCameraCalibrator(CharucoDetector):
         lin_success = np.all(lin_error < self.lin_error_threshold)
         rot_success = np.all(rot_error < self.rot_error_threshold)
 
-        # print('Pose Std: ', poses.std(axis=0))
-        # print('Lin Error: ', lin_error)
-        # print('Rot Error: ', rot_error)
+        _log.info(
+            "Calibration validation: valid_samples=%d, linear_mse=%s (limit=%g), rotation_mse=%s (limit=%g)",
+            len(readings),
+            np.array2string(lin_error, precision=6),
+            self.lin_error_threshold,
+            np.array2string(rot_error, precision=6),
+            self.rot_error_threshold,
+        )
 
         return lin_success and rot_success
 
@@ -511,7 +395,6 @@ def calibrate_wrist_camera():
     """Calibrates the wrist (hand) camera."""
     setup_logging()
 
-    # Set up the camera, robot, and calibrator
     cam = get_hand_camera()
     cam_id = cam.serial
     intrinsics_dict = cam.get_intrinsics()
@@ -580,21 +463,31 @@ def calibrate_wrist_camera():
         desired_pose_pt = torch.tensor(desired_pose_mat4x4, dtype=torch.float32, device="cuda")
         desired_pose_curobo = Pose.from_matrix(desired_pose_pt)
 
-        q_curr = get_q_curr()
-        js_curr = JointState.from_position(q_curr[None])
-        result = motion_gen.plan_single(js_curr, desired_pose_curobo, plan_config)
-        assert result.success, "planning failed"
+        if i == 0:
+            # calibration_traj(0) is exactly the taught pose, so capture it
+            # directly instead of letting pose IK choose a different joint branch.
+            _log.info("Capturing the initial calibration sample without moving the robot")
+        else:
+            q_curr = get_q_curr()
+            js_curr = JointState.from_position(q_curr[None])
+            result = motion_gen.plan_single(js_curr, desired_pose_curobo, plan_config)
+            if not bool(result.success):
+                raise RuntimeError(
+                    "Could not plan the calibration trajectory. "
+                    f"waypoint={i}, status={result.status}, q_current={q_curr.cpu().tolist()}, "
+                    f"target_pose={desired_pose.tolist()}"
+                )
 
-        plan = result.interpolated_plan
-        dt = result.interpolation_dt
-        timings = [dt] * plan.position.shape[0]
-        full_trajectory = plan.position.cpu().numpy()
-        velocities = plan.velocity.cpu().numpy()
-        result = client.execute_joint_impedance_path(
-            joint_confs=full_trajectory, joint_vels=velocities, durations=timings
-        )
-        if not result["success"]:
-            raise RuntimeError(f"Could not move robot! Error: {result['error']}")
+            plan = result.interpolated_plan
+            dt = result.interpolation_dt
+            timings = [dt] * plan.position.shape[0]
+            full_trajectory = plan.position.cpu().numpy()
+            velocities = plan.velocity.cpu().numpy()
+            result = client.execute_joint_impedance_path(
+                joint_confs=full_trajectory, joint_vels=velocities, durations=timings
+            )
+            if not result["success"]:
+                raise RuntimeError(f"Could not move robot at waypoint={i}! Error: {result['error']}")
 
         # env.update_robot(action, action_space="cartesian_position", blocking=False)
         time.sleep(0.4)  # wait for robot to stabilize
@@ -633,7 +526,10 @@ def calibrate_wrist_camera():
 
     success = calibrator.is_calibration_accurate(cam_id)
     if not success:
-        raise RuntimeError(f"Calibration failed as it wasn't accurate enough")
+        raise RuntimeError(
+            "Calibration failed validation; no calibration result was saved. "
+            f"valid_checkerboard_samples={len(calibrator._readings_dict[cam_id])}"
+        )
 
     # Save the calibration
     transformation = calibrator.calibrate(cam_id)

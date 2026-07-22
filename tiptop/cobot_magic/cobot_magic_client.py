@@ -55,20 +55,16 @@ class CobotMagicClient(ZmqRpcClient):
         return q.tolist()
 
     def _gripper_command(self, op: str, speed: float, force: float) -> dict[str, Any]:
-        try:
-            result = self._request(
-                op,
-                {
-                    "speed": _normalized_unit_interval(speed, "speed"),
-                    "force": _normalized_unit_interval(force, "force"),
-                },
-            )
-            # RPC envelope success is authoritative.  The bridge result holds
-            # operation metadata (for example force_supported), not another
-            # success envelope.
-            return {"success": True, "result": result}
-        except Exception as exc:
-            return {"success": False, "error": str(exc)}
+        result = self._request(
+            op,
+            {
+                "speed": _normalized_unit_interval(speed, "speed"),
+                "force": _normalized_unit_interval(force, "force"),
+            },
+        )
+        # Match Bamboo's interface: successful calls return a result mapping,
+        # while transport/controller errors are raised by the client.
+        return {"success": True, "result": result}
 
     def open_gripper(self, speed: float = 1.0, force: float = 0.1) -> dict[str, Any]:
         return self._gripper_command("open_gripper", speed=speed, force=force)
@@ -135,17 +131,11 @@ def get_cobot_magic_client() -> CobotMagicClient:
     from tiptop.config import tiptop_cfg
 
     robot_cfg = tiptop_cfg().robot
-
-    def get_cfg(name: str, default: Any) -> Any:
-        return robot_cfg.get(name, default) if hasattr(robot_cfg, "get") else getattr(robot_cfg, name, default)
-
-    controller_host = get_cfg("controller_host", get_cfg("host", "127.0.0.1"))
-    controller_port = get_cfg("controller_port", get_cfg("port", 15555))
     return CobotMagicClient(
-        host=str(controller_host),
-        port=int(controller_port),
+        host=str(robot_cfg.get("controller_host", "127.0.0.1")),
+        port=int(robot_cfg.get("controller_port", 15555)),
         dof=int(robot_cfg.dof),
-        request_timeout_ms=int(get_cfg("request_timeout_ms", 30_000)),
-        trajectory_timeout_ms=int(get_cfg("trajectory_timeout_ms", 300_000)),
-        max_message_bytes=int(get_cfg("max_message_bytes", DEFAULT_MAX_MESSAGE_BYTES)),
+        request_timeout_ms=int(robot_cfg.get("request_timeout_ms", 30_000)),
+        trajectory_timeout_ms=int(robot_cfg.get("trajectory_timeout_ms", 300_000)),
+        max_message_bytes=int(robot_cfg.get("max_message_bytes", DEFAULT_MAX_MESSAGE_BYTES)),
     )

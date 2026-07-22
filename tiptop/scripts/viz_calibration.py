@@ -5,6 +5,7 @@ import numpy as np
 import rerun as rr
 from curobo.types.base import TensorDeviceType
 from cutamp.robots import (
+    load_cobot_magic_container,
     load_fr3_franka_container,
     load_fr3_robotiq_container,
     load_panda_container,
@@ -53,6 +54,8 @@ def viz_calibration(rr_spawn: bool = True, viz_freq: float = 5.0, max_time: floa
             robot_container = load_panda_robotiq_container(tensor_args)
         elif cfg.robot.type == "ur5":
             robot_container = load_ur5_container(tensor_args)
+        elif cfg.robot.type == "cobot_magic":
+            robot_container = load_cobot_magic_container(tensor_args)
         else:
             raise ValueError(f"Unknown robot type: {cfg.robot.type}")
 
@@ -84,7 +87,7 @@ def viz_calibration(rr_spawn: bool = True, viz_freq: float = 5.0, max_time: floa
 
             depth_m = frame.depth.copy()
             depth_m[depth_m > 5.0] = 0.0
-            K = cam.intrinsics_matrix
+            K = frame.intrinsics
             xyz_map = depth_to_xyz(depth_m, K)
 
             # Convert point cloud to world frame using camera transform

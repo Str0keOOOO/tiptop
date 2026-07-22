@@ -19,7 +19,7 @@ _log = logging.getLogger(__name__)
 
 
 async def detect_and_segment(rgb: UInt8[np.ndarray, "h w 3"], task_instruction: str) -> dict:
-    """Run VLM detection and SAM2 segmentation pipeline."""
+    """Run OmniGround detection and SAM2 segmentation pipeline."""
     rgb_pil = Image.fromarray(rgb)
     rgb_pil_resized = rgb_pil.resize((800, int(800 * rgb_pil.size[1] / rgb_pil.size[0])), Image.Resampling.LANCZOS)
     _log.info(
@@ -27,19 +27,19 @@ async def detect_and_segment(rgb: UInt8[np.ndarray, "h w 3"], task_instruction: 
     )
 
     async def _detect():
-        from tiptop.perception.gemini import detect_and_translate_async
+        from tiptop.perception.omniground import detect_and_translate_async
 
-        _log.info(f"Starting Gemini object detection")
+        _log.info("Starting OmniGround object detection")
         _st = time.perf_counter()
         _bboxes, _grounded_atoms = await detect_and_translate_async(rgb_pil_resized, task_instruction)
         _dur = time.perf_counter() - _st
-        _log.info(f"Gemini detection took {_dur:.2f}s ({len(_bboxes)} objects, {len(_grounded_atoms)} atoms)")
+        _log.info("OmniGround detection took %.2fs (%d objects, %d atoms)", _dur, len(_bboxes), len(_grounded_atoms))
         return _bboxes, _grounded_atoms
 
     def _segment(_bboxes: list[dict]):
         from tiptop.perception.sam2 import sam2_segment_objects
 
-        _log.info(f"Starting SAM2 object segmentation with Gemini masks")
+        _log.info("Starting SAM2 object segmentation with OmniGround boxes")
         _st = time.perf_counter()
         # TODO: async version of this?
         _masks = sam2_segment_objects(rgb_pil, _bboxes)
@@ -68,7 +68,7 @@ async def predict_depth_and_grasps(
     depth_estimator: DepthEstimator | None = None,
     gripper_mask: Bool[np.ndarray, "h w 3"] | None = None,
 ) -> dict:
-    """Predict depth map using FoundationStereo and grasps using M2T2. Uses depth_estimator if provided, otherwise uses frame.depth."""
+    """Predict FoundationStereo depth and M2T2 grasps, falling back to frame.depth when available."""
     cfg = tiptop_cfg()
 
     # Get depth map — use estimator (e.g. FoundationStereo) or fall back to onboard sensor depth

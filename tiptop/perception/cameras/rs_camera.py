@@ -8,6 +8,7 @@ import cv2
 import numpy as np
 from jaxtyping import Float, UInt8, UInt16
 
+from tiptop.cobot_magic.rpc_client import ZmqRpcClient
 from tiptop.config import tiptop_cfg
 from tiptop.perception.cameras.frame import Frame
 
@@ -335,3 +336,60 @@ async def rs_infer_depth_async(
     )
     depth_aligned = _depth_ir_to_color(depth, K_ir, intrinsics.T_color_from_ir, intrinsics.K_color, color_size=rgb_size)
     return depth_aligned
+
+
+class RemoteRealsenseCamera(ZmqRpcClient):
+    """RealSense camera accessed through the Cobot Magic RPC bridge."""
+
+    def __init__(
+        self,
+        serial: str,
+        host: str,
+        port: int,
+        enable_depth: bool = False,
+        request_timeout_ms: int = 30_000,
+        max_message_bytes: int = 128 * 1024 * 1024,
+    ):
+        if not serial:
+            raise ValueError("serial must be non-empty")
+        self.serial = str(serial)
+        self._enable_depth = bool(enable_depth)
+        super().__init__(
+            host=host,
+            port=port,
+            request_timeout_ms=request_timeout_ms,
+            max_message_bytes=max_message_bytes,
+        )
+        _log.info(
+            "Configured remote RealSense %s through %s (depth=%s)", self.serial, self.endpoint, self._enable_depth
+        )
+
+    @cache
+    def get_intrinsics(self) -> RealsenseIntrinsics:
+        result = self._request("get_intrinsics", {"serial": self.serial})
+        if result.get("serial") != self.serial:
+            raise RuntimeError(f"Remote camera returned intrinsics for {result.get('serial')!r}")
+        return RealsenseIntrinsics(
+            K_color=np.asarray(result["K_color"], dtype=np.float32),
+            K_ir=np.asarray(result["K_ir"], dtype=np.float32),
+            baseline_ir=float(result["baseline_ir"]),
+            T_color_from_ir=np.asarray(result["T_color_from_ir"], dtype=np.float32),
+            distortion_color=np.asarray(result["distortion_color"], dtype=np.float32),
+        )
+
+    def read_camera(self) -> RealsenseFrame:
+        result = self._request("read_camera", {"serial": self.serial, "enable_depth": self._enable_depth})
+        if result.get("serial") != self.serial:
+            raise RuntimeError(f"Remote camera returned frame for {result.get('serial')!r}")
+
+        intrinsics = self.get_intrinsics()
+        return RealsenseFrame(
+            serial=self.serial,
+            timestamp=float(result["timestamp"]),
+            rgb=np.asarray(result["rgb"], dtype=np.uint8),
+            intrinsics=intrinsics.K_color,
+            depth=np.asarray(result["depth"], dtype=np.float32) if self._enable_depth else None,
+            ir_left=np.asarray(result["ir1"], dtype=np.uint8),
+            ir_right=np.asarray(result["ir2"], dtype=np.uint8),
+            depth_raw=None,
+        )

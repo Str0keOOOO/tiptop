@@ -9,6 +9,7 @@ import numpy as np
 from bamboo.client import BambooFrankaClient
 from cutamp.robots import (
     RerunRobot,
+    load_cobot_magic_rerun,
     load_fr3_franka_rerun,
     load_fr3_robotiq_rerun,
     load_franka_rerun,
@@ -18,12 +19,13 @@ from cutamp.robots import (
 from jaxtyping import Bool
 from PIL import Image
 
+from tiptop.cobot_magic.cobot_magic_client import CobotMagicClient
 from tiptop.config import config_dir, tiptop_cfg
 from tiptop.ur5.ur5_client import UR5Client
 
 gripper_mask_path = config_dir / "assets" / "gripper_mask.png"
 
-REQUIRED_CUTAMP_VERSION = "0.0.5"
+REQUIRED_CUTAMP_VERSION = "0.0.6"
 
 
 def check_cutamp_version() -> None:
@@ -79,7 +81,7 @@ def get_bamboo_client() -> BambooFrankaClient:
     )
 
 
-RobotClient = BambooFrankaClient | UR5Client
+RobotClient = BambooFrankaClient | UR5Client | CobotMagicClient
 
 
 def get_robot_client() -> RobotClient:
@@ -91,6 +93,10 @@ def get_robot_client() -> RobotClient:
         from tiptop.ur5.ur5_client import get_ur5_client
 
         return get_ur5_client()
+    elif cfg.robot.type == "cobot_magic":
+        from tiptop.cobot_magic.cobot_magic_client import get_cobot_magic_client
+
+        return get_cobot_magic_client()
     else:
         raise ValueError(f"Unknown robot type: {cfg.robot.type}")
 
@@ -109,6 +115,8 @@ def get_robot_rerun(robot_type: str | None = None) -> RerunRobot:
         return load_fr3_franka_rerun()
     elif robot_type == "ur5":
         return load_ur5_rerun()
+    elif robot_type == "cobot_magic":
+        return load_cobot_magic_rerun()
     else:
         raise ValueError(f"Unknown robot type: {robot_type}")
 
