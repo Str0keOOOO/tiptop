@@ -196,16 +196,15 @@ tiptop-server --include-workspace
 The Bamboo controller must be running for Franka commands. For Cobot Magic, start its `tiptop_client` controller bridge instead.
 ```
 
-### Cobot Magic health checks
+### Cobot Magic camera health check
 
-When `robot.type: cobot_magic`, TiPToP reaches the upper-computer controller and RealSense bridge through separate configurable ZeroMQ tunnels. The checks below use `tiptop/config/tiptop.yml` by default and accept `--host`, `--port`, and timeout overrides for diagnosis.
+When `robot.type: cobot_magic`, the RealSense bridge can be checked with:
 
 ```bash
-cobot-controller-health
 cobot-camera-health
 ```
 
-The controller check calls `ping` and `health`. The camera check calls `ping`, `health`, `list_cameras`, `get_intrinsics`, and `read_camera` for the configured serial. It verifies the RGB/IR snapshot and calibration contract without connecting to ROS or the camera from the GPU machine.
+The camera check calls `ping`, `health`, `list_cameras`, `get_intrinsics`, and `read_camera` for the configured serial. It verifies the RGB/IR snapshot and calibration contract without connecting to ROS or the camera from the GPU machine.
 
 ### get-joint-positions
 
