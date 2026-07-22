@@ -59,6 +59,8 @@ If using `fr3` or `panda`, you should define wrist camera collision spheres in t
 
 You can check `tiptop/config/tiptop.yml` for the full config available.
 
+For `cobot_magic`, `tiptop-config` asks for the local controller and camera SSH-tunnel endpoints separately, along with the OmniGround endpoint, model ID, timeout, and optional temperature. See [Cobot Magic Remote Runtime](cobot-magic.md) before moving the robot.
+
 ### Verify robot connection and camera
 
 Check you can connect to the robot on the GPU workstation through Bamboo:
@@ -75,23 +77,16 @@ viz-gripper-cam  # Press 'q' to exit
 
 See [Troubleshooting](#troubleshooting) to debug any problems you may have.
 
-## Setup Gemini API Key
+## Configure OmniGround
 
 ```{important}
-TiPToP requires a Gemini API key for vision-language tasks including object detection, task parsing, and gripper detection. You must set this up before running calibration or demos.
+TiPToP sends grounding requests to OmniGround before calibration or demos. Start the configured OmniGround service first.
 ```
 
-Generate an API key following the instructions at [https://ai.google.dev/gemini-api/docs/api-key](https://ai.google.dev/gemini-api/docs/api-key).
+Set `perception.vlm.url`, `endpoint` (`/generate` or `/v1/generate`), required `model_id`, optional `temperature`, and `timeout_seconds`. TiPToP posts multipart form data with a PNG `image`, the complete `prompt`, and `model_id`. OmniGround returns the direct JSON object `{"bboxes": [...], "predicates": [...]}`; text wrappers and Markdown code fences are rejected.
 
-Set the `GOOGLE_API_KEY` environment variable:
+For a Cobot Magic upper computer and its remote RealSense bridge, see [Cobot Magic Remote Runtime](cobot-magic.md).
 
-```bash
-export GOOGLE_API_KEY=<your-key>
-```
-
-```{hint}
-Add this to your `~/.bashrc` or `~/.zshrc` so it persists across sessions.
-```
 
 ## Define the Static Workspace
 
@@ -196,7 +191,7 @@ You should re-calibrate the camera if it has been knocked by any objects or obst
 
 ### Compute the gripper mask
 
-We compute a gripper mask to remove any depth predictions of the gripper from the projected point cloud. Note this uses Gemini to detect the gripper, so make sure you set up your API key following the instructions earlier. Run:
+We compute a gripper mask to remove any depth predictions of the gripper from the projected point cloud. This uses the configured VLM to detect the gripper, so make sure the VLM service is available. Run:
 
 ```bash
 compute-gripper-mask

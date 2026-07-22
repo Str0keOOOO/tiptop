@@ -10,7 +10,7 @@ TiPToP cannot stack multiple objects atop one another, so tasks such as block st
 
 The perception pipeline assumes a single dominant table surface, detected via iterative RANSAC scored by how many object contact points lie on each candidate plane. This fails or degrades when the workspace surface is not flat or when objects are distributed across multiple surfaces (e.g., a shelf above a table). Workspaces without a clear table-like surface are not supported. See `segment_table_with_ransac` in `tiptop/perception/segmentation.py`.
 
-One approach to overcome this is to extend the Gemini VLM object detection to also detect surfaces (e.g., shelves, trays, table regions), which could be used to extract mutliple support surfaces for the scene representation.
+One approach to overcome this is to extend VLM object detection to also detect surfaces (e.g., shelves, trays, table regions), which could be used to extract mutliple support surfaces for the scene representation.
 
 
 #### Partial observability and convex hull geometry

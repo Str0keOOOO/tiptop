@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 TiPToP is a Task and Motion Planning (TAMP) system for robots with a modular architecture consisting of three sequential components:
 
-1. **Perception Module** - Processes RGB images and natural language to build object-centric 3D representations using FoundationStereo (depth), Gemini Robotics-ER 1.5 (VLM), SAM-2 (segmentation), and M2T2 (grasp detection)
+1. **Perception Module** - Processes RGB images and natural language to build object-centric 3D representations using FoundationStereo (depth), OmniGround (VLM grounding), SAM-2 (segmentation), and M2T2 (grasp detection)
 2. **Planning Module** - Uses cuTAMP, a GPU-parallelized TAMP solver that optimizes thousands of candidate pick-and-place plans in parallel
 3. **Execution Module** - Executes trajectories using joint impedance control
 
@@ -43,7 +43,7 @@ The package provides several CLI entry points (defined in `pyproject.toml`). Fir
 
 ```bash
 # Setup and calibration
-compute-gripper-mask       # Gemini + SAM2 gripper detection
+compute-gripper-mask       # OmniGround + SAM2 gripper detection
 
 # Visualization
 viz-calibration            # Rerun visualization of camera calibration
@@ -114,13 +114,13 @@ The system follows this pipeline:
 2. Perception (Async where possible)
    ├─> FoundationStereo (depth refinement)
    ├─> Depth-to-3D projection (point cloud)
-   ├─> Gemini (object detection from RGB)
+   ├─> OmniGround (object detection from RGB)
    ├─> SAM2 (object segmentation)
    └─> M2T2 (grasp generation from point cloud)
 
 3. Task Planning
    ├─> Create TAMP environment (objects + surfaces)
-   ├─> Parse instruction with Gemini
+   ├─> Parse instruction with OmniGround
    └─> Run cuTAMP for motion plans
 
 4. Execution

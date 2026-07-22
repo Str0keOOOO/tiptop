@@ -23,7 +23,7 @@ See [Getting Started - Run TiPToP](getting-started.md#run-tiptop) for setup inst
 - Perception servers (M2T2 and FoundationStereo) must be running
 - Robot must be calibrated and gripper mask computed
 - Workspace obstacles must be defined (see [Getting Started](getting-started.md#define-the-static-workspace))
-- `GOOGLE_API_KEY` environment variable must be set
+- Configured VLM server must be running
 
 **Available flags:**
 
@@ -88,7 +88,7 @@ Offline evaluation mode. Loads a pre-recorded RGB-D observation from an H5 file 
 
 **Prerequisites:**
 - M2T2 server must be running
-- `GOOGLE_API_KEY` environment variable must be set
+- Configured VLM server must be running
 
 **Available flags:**
 
@@ -124,7 +124,7 @@ Re-runs TiPToP from a saved run directory. Loads the observation (RGB, depth, in
 
 **Prerequisites:**
 - M2T2 server must be running
-- `GOOGLE_API_KEY` environment variable must be set
+- Configured VLM server must be running
 - A saved TiPToP run directory (from `tiptop-run`, `tiptop-h5`, or `tiptop-rerun`)
 
 **Available flags:**
@@ -164,7 +164,7 @@ Runs the TiPToP perception and planning pipeline as a WebSocket server. Clients 
 
 **Prerequisites:**
 - M2T2 server must be running
-- `GOOGLE_API_KEY` environment variable must be set
+- Configured VLM server must be running
 
 **Available flags:**
 
@@ -193,12 +193,23 @@ tiptop-server --include-workspace
 ## Robot Control
 
 ```{important}
-The Bamboo controller must be running for all commands in this section.
+The Bamboo controller must be running for Franka commands. For Cobot Magic, start its `tiptop_client` controller bridge instead.
 ```
+
+### Cobot Magic health checks
+
+When `robot.type: cobot_magic`, TiPToP reaches the upper-computer controller and RealSense bridge through separate configurable ZeroMQ tunnels. The checks below use `tiptop/config/tiptop.yml` by default and accept `--host`, `--port`, and timeout overrides for diagnosis.
+
+```bash
+cobot-controller-health
+cobot-camera-health
+```
+
+The controller check calls `ping` and `health`. The camera check calls `ping`, `health`, `list_cameras`, `get_intrinsics`, and `read_camera` for the configured serial. It verifies the RGB/IR snapshot and calibration contract without connecting to ROS or the camera from the GPU machine.
 
 ### get-joint-positions
 
-Prints the current joint positions of the robot.
+Prints the current arm joint positions. Cobot Magic returns exactly six joint angles through its controller RPC.
 
 **Example usage:**
 
@@ -206,7 +217,7 @@ Prints the current joint positions of the robot.
 get-joint-positions
 ```
 
-The command will print a list of 7 joint angles representing the current robot configuration.
+The command prints the configured arm's current joint configuration.
 
 **Use cases:**
 
@@ -284,7 +295,7 @@ The capture position should provide a clear view of the entire manipulation area
 
 ### gripper-open
 
-Opens the Robotiq gripper.
+Opens the configured gripper. With Cobot Magic, this issues one `open_gripper` RPC and reports any bridge error.
 
 **Example usage:**
 
@@ -302,7 +313,7 @@ gripper-open
 
 ### gripper-close
 
-Closes the Robotiq gripper.
+Closes the configured gripper. With Cobot Magic, this issues one `close_gripper` RPC and reports any bridge error.
 
 **Example usage:**
 
@@ -536,11 +547,11 @@ After calibration, use `viz-calibration` to verify the camera frame aligns corre
 
 ### compute-gripper-mask
 
-Computes a binary mask to filter out the gripper from perception outputs using Gemini for detection and SAM2 for segmentation. This mask removes gripper geometry from the projected point cloud, preventing the motion planner from treating the gripper as an obstacle.
+Computes a binary mask to filter out the gripper from perception outputs using the configured VLM for detection and SAM2 for segmentation. This mask removes gripper geometry from the projected point cloud, preventing the motion planner from treating the gripper as an obstacle.
 
 **Prerequisites:**
 
-- `GOOGLE_API_KEY` environment variable must be set (used for Gemini detection)
+- Configured VLM server must be running
 - Robot should be in a position where the gripper is clearly visible and distinguishable from the background
 
 **Example usage:**

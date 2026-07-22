@@ -36,8 +36,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   The `tiptop-h5` CLI and its flags are unchanged ([#16]).
 - Offline runs save the merged config into the run directory so re-runs are reproducible ([#16]).
 - Logging setup moved to the entrypoint level ([#16]).
-- Updated the Gemini perception model from `gemini-robotics-er-1.5-preview` to
-  `gemini-robotics-er-1.6-preview` ([#26]).
+- Updated the hosted perception model configuration ([#26]).
 - Updated cuTAMP to 0.0.4 and added a configurable max number of motion-refinement
   attempts ([#19], [#20]).
 - `tiptop-server` serializes pipeline runs with an asyncio lock so concurrent requests
