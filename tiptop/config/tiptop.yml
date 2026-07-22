@@ -5,11 +5,13 @@ robot:
   type: cobot_magic
   dof: 6
 
-  # Local end of the SSH reverse tunnel: GPU:15555 -> upper computer:5555.
-  host: "127.0.0.1"
-  port: 15555
+  # Local end of the SSH tunnel: GPU:15555 -> upper computer controller:5555.
+  # Keep host loopback unless the bridge is protected by an equivalent network boundary.
+  controller_host: "127.0.0.1"
+  controller_port: 15555
   request_timeout_ms: 30000
   trajectory_timeout_ms: 300000
+  max_message_bytes: 134217728
 
   # The upper-computer backend currently controls the right arm. The GPU client
   # sends only six arm joints; ROS topics and the servo loop remain remote.
@@ -58,28 +60,36 @@ robot:
 cameras:
   # TiPToP only uses the hand camera for perception
   hand:
-    # Confirmed by the remote camera service: /camera_r, role=right_wrist.
+    # Cobot Magic camera RPC through the local end of an SSH tunnel:
+    # GPU:15556 -> upper computer camera bridge:5556.
     serial: "339222070351"
     type: remote_realsense
-    host: "127.0.0.1"
-    port: 15556
+    camera_host: "127.0.0.1"
+    camera_port: 15556
+    request_timeout_ms: 30000
+    max_message_bytes: 134217728
 
   # External camera is optional but helpful for recording execution and scene visualization script (viz-scene)
   external:
     serial: "339222070351"
     type: remote_realsense
-    host: "127.0.0.1"
-    port: 15556
+    camera_host: "127.0.0.1"
+    camera_port: 15556
+    request_timeout_ms: 30000
+    max_message_bytes: 134217728
 
 # == Perception services ==
 # No need to change these unless you're running them on a remote machine or changed the ports
 perception:
-  # VLM contract: image + full TiPToP prompt -> generated text.
-  # The service must accept multipart ``image`` and ``prompt`` fields.
+  # OmniGround contract: multipart PNG/JPEG image, the complete prompt,
+  # required model_id, and an optional temperature.  The direct success body is
+  # {"bboxes": [...], "predicates": [...]} (not a text/result wrapper).
   vlm:
     url: "http://localhost:8011"
     endpoint: "/generate"
     timeout_seconds: 120
+    model_id: "molmo2-er"
+    temperature: null
 
   foundation_stereo:
     url: "http://localhost:1234"

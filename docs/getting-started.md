@@ -59,6 +59,8 @@ If using `fr3` or `panda`, you should define wrist camera collision spheres in t
 
 You can check `tiptop/config/tiptop.yml` for the full config available.
 
+For `cobot_magic`, `tiptop-config` asks for the local controller and camera SSH-tunnel endpoints separately, along with the OmniGround endpoint, model ID, timeout, and optional temperature. See [Cobot Magic Remote Runtime](cobot-magic.md) before moving the robot.
+
 ### Verify robot connection and camera
 
 Check you can connect to the robot on the GPU workstation through Bamboo:
@@ -75,13 +77,15 @@ viz-gripper-cam  # Press 'q' to exit
 
 See [Troubleshooting](#troubleshooting) to debug any problems you may have.
 
-## Configure the VLM service
+## Configure OmniGround
 
 ```{important}
-TiPToP sends vision-language requests to the HTTP VLM configured in `tiptop/config/tiptop.yml`. Start the service before running calibration or demos.
+TiPToP sends grounding requests to OmniGround before calibration or demos. Start the configured OmniGround service first.
 ```
 
-Set `perception.vlm.url` and `endpoint` for your service. TiPToP posts multipart form data with `image` (PNG) and `prompt` fields; the service must return the requested JSON as plain text.
+Set `perception.vlm.url`, `endpoint` (`/generate` or `/v1/generate`), required `model_id`, optional `temperature`, and `timeout_seconds`. TiPToP posts multipart form data with a PNG `image`, the complete `prompt`, and `model_id`. OmniGround returns the direct JSON object `{"bboxes": [...], "predicates": [...]}`; text wrappers and Markdown code fences are rejected.
+
+For a Cobot Magic upper computer and its remote RealSense bridge, see [Cobot Magic Remote Runtime](cobot-magic.md).
 
 
 ## Define the Static Workspace

@@ -78,6 +78,10 @@ def validate_response(response: Mapping[str, Any]) -> None:
     """Validate the fields common to every server response."""
     if not isinstance(response, Mapping):
         raise ProtocolError("RPC response must be a dictionary")
+    required_fields = {"protocol_version", "request_id", "success", "result", "error"}
+    missing_fields = required_fields.difference(response)
+    if missing_fields:
+        raise ProtocolError(f"RPC response is missing fields: {sorted(missing_fields)}")
     if response.get("protocol_version") != PROTOCOL_VERSION:
         raise ProtocolError(
             f"RPC protocol version mismatch: {response.get('protocol_version')!r}; "
@@ -90,10 +94,10 @@ def validate_response(response: Mapping[str, Any]) -> None:
     if success:
         if response.get("error") is not None:
             raise ProtocolError("successful RPC response must have error=None")
-        if "result" not in response:
-            raise ProtocolError("successful RPC response is missing result")
         return
 
+    if response.get("result") is not None:
+        raise ProtocolError("failed RPC response must have result=None")
     error = response.get("error")
     if not isinstance(error, Mapping):
         raise ProtocolError("failed RPC response must include an error dictionary")

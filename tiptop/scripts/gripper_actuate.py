@@ -10,14 +10,18 @@ _log = logging.getLogger(__name__)
 def gripper_open(speed: float = 1.0, force: float = 0.1):
     """Open the Robotiq gripper."""
     client = get_robot_client()
-    client.open_gripper(speed=speed, force=force)
+    result = client.open_gripper(speed=speed, force=force)
+    if not result or not result.get("success"):
+        raise RuntimeError(f"Gripper open failed: {result.get('error') if result else 'no response'}")
     _log.info(f"Gripper opened with speed={speed}, force={force}")
 
 
 def gripper_close(speed: float = 1.0, force: float = 0.1):
     """Close the Robotiq gripper."""
     client = get_robot_client()
-    client.close_gripper(speed=speed, force=force)
+    result = client.close_gripper(speed=speed, force=force)
+    if not result or not result.get("success"):
+        raise RuntimeError(f"Gripper close failed: {result.get('error') if result else 'no response'}")
     _log.info(f"Gripper closed with speed={speed}, force={force}")
 
 

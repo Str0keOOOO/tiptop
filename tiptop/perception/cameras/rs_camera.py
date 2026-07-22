@@ -364,50 +364,45 @@ def _required_remote_ir(result: dict[str, Any], field: str, rgb_shape: tuple[int
     return np.ascontiguousarray(array)
 
 
-def _required_remote_depth(
-    result: dict[str, Any], field: str, image_shape: tuple[int, int], dtype: np.dtype[Any]
-) -> np.ndarray:
-    if field not in result:
-        raise RuntimeError(f"Remote camera response is missing {field}")
-    array = np.asarray(result[field])
-    if array.dtype != dtype:
-        raise RuntimeError(f"Remote camera {field} has dtype {array.dtype}, expected {dtype}")
-    if array.shape != image_shape or not np.all(np.isfinite(array)):
-        raise RuntimeError(f"Remote camera {field} must be finite with shape {image_shape}")
-    return np.ascontiguousarray(array)
-
-
 class RemoteRealsenseCamera(ZmqRpcClient):
-    """RealSense camera client that receives the same data contract over RPC."""
+    """RealSense RPC client for Cobot Magic's RGB/IR snapshot contract.
+
+    The remote bridge is the only process that talks to ROS and the physical
+    camera.  It intentionally does not expose a depth field; TiPToP's existing
+    FoundationStereo path derives depth from the returned IR pair.
+    """
 
     def __init__(
         self,
         serial: str,
         host: str,
         port: int,
-        enable_depth: bool = False,
         request_timeout_ms: int = 30_000,
+        max_message_bytes: int = 128 * 1024 * 1024,
     ):
         if not serial:
             raise ValueError("serial must be non-empty")
         self.serial = str(serial)
-        self._enable_depth = enable_depth
         super().__init__(
             host=host,
             port=port,
             request_timeout_ms=request_timeout_ms,
-            max_message_bytes=128 * 1024 * 1024,
+            max_message_bytes=max_message_bytes,
         )
         _log.info("Configured remote RealSense %s through %s for FoundationStereo", self.serial, self.endpoint)
 
     @cache
     def get_intrinsics(self) -> RealsenseIntrinsics:
         result = self._request("get_intrinsics", {"serial": self.serial})
-        if not isinstance(result, dict):
-            raise RuntimeError("Invalid get_intrinsics response")
-        if str(result.get("serial")) != self.serial:
-            raise RuntimeError(f"Remote camera returned intrinsics for {result.get('serial')!r}, expected {self.serial!r}")
+        return self._parse_intrinsics(result, operation="get_intrinsics")
 
+    def _parse_intrinsics(self, result: Any, *, operation: str) -> RealsenseIntrinsics:
+        if not isinstance(result, dict):
+            raise RuntimeError(f"Invalid {operation} response")
+        if result.get("serial") != self.serial:
+            raise RuntimeError(
+                f"Remote camera returned {operation} data for {result.get('serial')!r}, expected {self.serial!r}"
+            )
         K_color = _required_remote_matrix(result, "K_color", (3, 3))
         distortion_color = _required_remote_matrix(result, "distortion_color", (5,))
         K_ir = _required_remote_matrix(result, "K_ir", (3, 3))
@@ -429,14 +424,22 @@ class RemoteRealsenseCamera(ZmqRpcClient):
         result = self._request("list_cameras", {})
         if not isinstance(result, dict) or not isinstance(result.get("cameras"), list):
             raise RuntimeError("Invalid list_cameras response")
-        return result["cameras"]
+        cameras: list[dict[str, Any]] = []
+        for index, camera in enumerate(result["cameras"]):
+            if not isinstance(camera, dict):
+                raise RuntimeError(f"Remote camera cameras[{index}] must be a dictionary")
+            for field in ("namespace", "serial", "role"):
+                if not isinstance(camera.get(field), str) or not camera[field]:
+                    raise RuntimeError(f"Remote camera cameras[{index}].{field} must be a non-empty string")
+            cameras.append({"namespace": camera["namespace"], "serial": camera["serial"], "role": camera["role"]})
+        return cameras
 
     def read_camera(self) -> RealsenseFrame:
-        """Read an RPC frame with the same data contract as RealsenseCamera.read_camera()."""
+        """Read and validate one Cobot Magic RGB/IR snapshot for this serial."""
         result = self._request("read_camera", {"serial": self.serial})
         if not isinstance(result, dict):
             raise RuntimeError("Invalid read_camera response")
-        if str(result.get("serial")) != self.serial:
+        if result.get("serial") != self.serial:
             raise RuntimeError(f"Remote camera returned frame for {result.get('serial')!r}, expected {self.serial!r}")
 
         rgb = np.asarray(result.get("rgb"))
@@ -449,24 +452,18 @@ class RemoteRealsenseCamera(ZmqRpcClient):
         if not np.isfinite(timestamp):
             raise RuntimeError("Remote camera timestamp must be finite")
 
-        ir_left = _required_remote_ir(result, "ir_left", image_shape)
-        ir_right = _required_remote_ir(result, "ir_right", image_shape)
-        depth = None
-        depth_raw = None
-        if self._enable_depth:
-            depth = _required_remote_depth(result, "depth", image_shape, np.dtype(np.float32))
-            depth_raw = _required_remote_depth(result, "depth_raw", image_shape, np.dtype(np.uint16))
-
-        intrinsics = self.get_intrinsics()
+        ir_left = _required_remote_ir(result, "ir1", image_shape)
+        ir_right = _required_remote_ir(result, "ir2", image_shape)
+        intrinsics = self._parse_intrinsics(result, operation="read_camera")
         return RealsenseFrame(
             serial=self.serial,
             timestamp=timestamp,
             rgb=rgb,
             intrinsics=intrinsics.K_color,
-            depth=depth,
+            depth=None,
             ir_left=ir_left,
             ir_right=ir_right,
-            depth_raw=depth_raw,
+            depth_raw=None,
         )
 
 
@@ -480,17 +477,32 @@ def _remote_camera_json_default(value: Any) -> Any:
 
 def remote_realsense_health_main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Check a forwarded Cobot Magic RealSense RPC endpoint")
-    parser.add_argument("--host", default="127.0.0.1")
-    parser.add_argument("--port", type=int, default=15556)
-    parser.add_argument("--serial", required=True)
-    parser.add_argument("--timeout-ms", type=int, default=5_000)
+    parser.add_argument("--host", help="Camera tunnel host; defaults to cameras.hand.camera_host")
+    parser.add_argument("--port", type=int, help="Camera tunnel port; defaults to cameras.hand.camera_port")
+    parser.add_argument("--serial", help="Camera serial; defaults to cameras.hand.serial")
+    parser.add_argument("--timeout-ms", type=int, help="RPC timeout; defaults to cameras.hand.request_timeout_ms")
+    parser.add_argument(
+        "--max-message-bytes", type=int, help="RPC size limit; defaults to cameras.hand.max_message_bytes"
+    )
     args = parser.parse_args(argv)
 
+    camera_cfg = tiptop_cfg().cameras.hand
+    host = args.host or camera_cfg.get("camera_host", camera_cfg.get("host", "127.0.0.1"))
+    port = args.port if args.port is not None else camera_cfg.get("camera_port", camera_cfg.get("port", 15556))
+    serial = args.serial or camera_cfg.serial
+    timeout_ms = args.timeout_ms if args.timeout_ms is not None else camera_cfg.get("request_timeout_ms", 5_000)
+    max_message_bytes = (
+        args.max_message_bytes
+        if args.max_message_bytes is not None
+        else camera_cfg.get("max_message_bytes", 128 * 1024 * 1024)
+    )
+
     camera = RemoteRealsenseCamera(
-        serial=args.serial,
-        host=args.host,
-        port=args.port,
-        request_timeout_ms=args.timeout_ms,
+        serial=serial,
+        host=host,
+        port=port,
+        request_timeout_ms=timeout_ms,
+        max_message_bytes=max_message_bytes,
     )
     try:
         frame = camera.read_camera()
@@ -501,8 +513,8 @@ def remote_realsense_health_main(argv: Sequence[str] | None = None) -> int:
             "intrinsics": camera.get_intrinsics(),
             "frame": {
                 "rgb_shape": frame.rgb.shape,
-                "ir_left_shape": frame.ir_left.shape,
-                "ir_right_shape": frame.ir_right.shape,
+                "ir1_shape": frame.ir_left.shape,
+                "ir2_shape": frame.ir_right.shape,
                 "timestamp": frame.timestamp,
             },
         }

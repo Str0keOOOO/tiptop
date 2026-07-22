@@ -28,7 +28,12 @@ class RpcRemoteError(RuntimeError):
 
 
 class ZmqRpcClient:
-    """A reconnecting transport that never retries an RPC operation automatically."""
+    """ZeroMQ REQ/REP transport that reconnects after failures but never retries requests.
+
+    Reconnecting only resets the local REQ socket after a timeout or malformed
+    response.  It deliberately does not resend the request: a controller
+    command may already have reached the robot when its response is lost.
+    """
 
     def __init__(
         self,
@@ -66,10 +71,6 @@ class ZmqRpcClient:
         socket.setsockopt(zmq.SNDTIMEO, self.request_timeout_ms)
         socket.setsockopt(zmq.RCVTIMEO, self.request_timeout_ms)
         socket.setsockopt(zmq.MAXMSGSIZE, self.max_message_bytes)
-        if hasattr(zmq, "REQ_RELAXED"):
-            socket.setsockopt(zmq.REQ_RELAXED, 1)
-        if hasattr(zmq, "REQ_CORRELATE"):
-            socket.setsockopt(zmq.REQ_CORRELATE, 1)
         socket.connect(self.endpoint)
         self._socket = socket
 
@@ -121,7 +122,10 @@ class ZmqRpcClient:
                     socket.setsockopt(zmq.RCVTIMEO, self.request_timeout_ms)
 
         if response["request_id"] != request_id:
-            raise RuntimeError("Mismatched RPC request_id")
+            raise RuntimeError(
+                f"Mismatched RPC request_id for {op}: expected {request_id!r}, "
+                f"received {response['request_id']!r}"
+            )
         if response["success"]:
             return response["result"]
 

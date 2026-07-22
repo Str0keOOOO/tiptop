@@ -7,6 +7,7 @@ from typing import Any, Sequence
 
 import numpy as np
 
+from tiptop.cobot_magic.protocol import DEFAULT_MAX_MESSAGE_BYTES
 from tiptop.cobot_magic.rpc_client import ZmqRpcClient
 
 
@@ -27,9 +28,10 @@ class CobotMagicClient(ZmqRpcClient):
         dof: int,
         request_timeout_ms: int = 30_000,
         trajectory_timeout_ms: int = 300_000,
+        max_message_bytes: int = DEFAULT_MAX_MESSAGE_BYTES,
     ):
-        if int(dof) <= 0:
-            raise ValueError(f"dof must be positive, got {dof}")
+        if int(dof) != 6:
+            raise ValueError(f"Cobot Magic RPC requires exactly 6 arm joints, got {dof}")
         if int(trajectory_timeout_ms) <= 0:
             raise ValueError("trajectory_timeout_ms must be positive")
         self.dof = int(dof)
@@ -38,7 +40,7 @@ class CobotMagicClient(ZmqRpcClient):
             host=host,
             port=port,
             request_timeout_ms=request_timeout_ms,
-            max_message_bytes=64 * 1024 * 1024,
+            max_message_bytes=max_message_bytes,
         )
 
     def get_joint_positions(self) -> list[float]:
@@ -61,9 +63,10 @@ class CobotMagicClient(ZmqRpcClient):
                     "force": _normalized_unit_interval(force, "force"),
                 },
             )
-            if not isinstance(result, dict) or result.get("success") is not True:
-                raise RuntimeError("Remote gripper command did not report success")
-            return {"success": True}
+            # RPC envelope success is authoritative.  The bridge result holds
+            # operation metadata (for example force_supported), not another
+            # success envelope.
+            return {"success": True, "result": result}
         except Exception as exc:
             return {"success": False, "error": str(exc)}
 
@@ -86,7 +89,7 @@ class CobotMagicClient(ZmqRpcClient):
             durations_array = np.ascontiguousarray(durations, dtype=np.float64)
 
             if joint_confs_array.shape == (0,):
-                return {"success": True}
+                raise ValueError("Trajectory must contain at least one 6-DOF waypoint")
             if joint_confs_array.ndim != 2 or joint_confs_array.shape[1] != self.dof:
                 raise ValueError(
                     f"Expected joint_confs shape [N, {self.dof}], got {joint_confs_array.shape}"
@@ -114,10 +117,14 @@ class CobotMagicClient(ZmqRpcClient):
                 },
                 timeout_ms=self.trajectory_timeout_ms,
             )
-            if not isinstance(result, dict) or result.get("success") is not True:
-                error = result.get("error", "Remote trajectory execution failed") if isinstance(result, dict) else "Invalid response"
-                return {"success": False, "error": str(error)}
-            return {"success": True}
+            return {"success": True, "result": result}
+        except Exception as exc:
+            return {"success": False, "error": str(exc)}
+
+    def stop(self) -> dict[str, Any]:
+        """Request a bridge-level stop without retrying the safety-sensitive command."""
+        try:
+            return {"success": True, "result": self._request("stop", {})}
         except Exception as exc:
             return {"success": False, "error": str(exc)}
 
@@ -132,10 +139,13 @@ def get_cobot_magic_client() -> CobotMagicClient:
     def get_cfg(name: str, default: Any) -> Any:
         return robot_cfg.get(name, default) if hasattr(robot_cfg, "get") else getattr(robot_cfg, name, default)
 
+    controller_host = get_cfg("controller_host", get_cfg("host", "127.0.0.1"))
+    controller_port = get_cfg("controller_port", get_cfg("port", 15555))
     return CobotMagicClient(
-        host=str(robot_cfg.host),
-        port=int(robot_cfg.port),
+        host=str(controller_host),
+        port=int(controller_port),
         dof=int(robot_cfg.dof),
         request_timeout_ms=int(get_cfg("request_timeout_ms", 30_000)),
         trajectory_timeout_ms=int(get_cfg("trajectory_timeout_ms", 300_000)),
+        max_message_bytes=int(get_cfg("max_message_bytes", DEFAULT_MAX_MESSAGE_BYTES)),
     )

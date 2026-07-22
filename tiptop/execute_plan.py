@@ -3,6 +3,7 @@ import time
 from collections.abc import Mapping
 
 from cutamp.robots.utils import RerunRobot
+from tiptop.cobot_magic.cobot_magic_client import CobotMagicClient
 from tiptop.config import tiptop_cfg
 from tiptop.utils import RobotClient, get_robot_client
 
@@ -88,7 +89,15 @@ def execute_cutamp_plan(
         if result is None:
             raise RuntimeError("Fatal error: result should not be None")
         if not result["success"]:
-            raise ExecutionFailure(result["error"])
+            error = str(result.get("error", "robot command failed"))
+            # A failed Cobot Magic motion may have reached the bridge even if
+            # its response was lost. Ask its explicit stop operation once;
+            # ZmqRpcClient never replays either command.
+            if isinstance(client, CobotMagicClient):
+                stop_result = client.stop()
+                if not stop_result["success"]:
+                    error = f"{error}; subsequent Cobot Magic stop failed: {stop_result.get('error')}"
+            raise ExecutionFailure(error)
 
         if action_type == "gripper" and rerun_robot is not None:
             try:

@@ -49,11 +49,25 @@ async def detect_and_segment(rgb: UInt8[np.ndarray, "h w 3"], task_instruction: 
 
     bboxes, grounded_atoms = await _detect()
 
-    # Sanitize labels: replace spaces with underscores for downstream compatibility
+    # OmniGround has already validated labels and predicate references. Keep the
+    # existing planner-compatible spelling conversion, then re-check that it
+    # did not collapse two distinct remote labels into one internal label.
     for bbox in bboxes:
         bbox["label"] = bbox["label"].replace(" ", "_")
     for atom in grounded_atoms:
         atom["args"] = [arg.replace(" ", "_") for arg in atom["args"]]
+    labels = [bbox["label"] for bbox in bboxes]
+    if len(labels) != len(set(labels)):
+        raise ValueError("OmniGround labels are no longer unique after TiPToP label normalization")
+    known_labels = set(labels)
+    unknown_predicate_labels = sorted(
+        {arg for atom in grounded_atoms for arg in atom["args"] if arg not in known_labels}
+    )
+    if unknown_predicate_labels:
+        raise ValueError(
+            "OmniGround predicate arguments reference unknown labels after TiPToP label normalization: "
+            f"{unknown_predicate_labels}"
+        )
 
     masks = await asyncio.to_thread(_segment, bboxes)
 
@@ -68,7 +82,7 @@ async def predict_depth_and_grasps(
     depth_estimator: DepthEstimator | None = None,
     gripper_mask: Bool[np.ndarray, "h w 3"] | None = None,
 ) -> dict:
-    """Predict depth map using FoundationStereo and grasps using M2T2. Uses depth_estimator if provided, otherwise uses frame.depth."""
+    """Predict FoundationStereo depth and M2T2 grasps, falling back to frame.depth when available."""
     cfg = tiptop_cfg()
 
     # Get depth map — use estimator (e.g. FoundationStereo) or fall back to onboard sensor depth

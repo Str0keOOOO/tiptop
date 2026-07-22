@@ -18,6 +18,8 @@ TiPToP solves complex real-world manipulation tasks directly from raw pixels and
 
 See the [documentation](https://tiptop-robot.readthedocs.io/) for installation, setup, and usage instructions.
 
+For a Cobot Magic deployment, TiPToP uses the existing `tiptop_client` ZeroMQ RPC bridge for robot control and the wrist camera, and OmniGround for VLM grounding. See [the Cobot Magic runtime guide](docs/cobot-magic.md).
+
 ## Building the Docs
 
 The documentation is hosted at [tiptop-robot.readthedocs.io](https://tiptop-robot.readthedocs.io/) and automatically rebuilds on every push to `main`. To build and serve it locally for previewing changes:

@@ -28,6 +28,13 @@ Install TiPToP and its modules, including perception models and Task and Motion 
 Configure your robot, calibrate cameras, and run your first TiPToP demo!
 :::
 
+:::{grid-item-card} 🦾 Cobot Magic
+:link: cobot-magic
+:link-type: doc
+
+Connect the Cobot Magic controller and wrist camera through its RPC bridge.
+:::
+
 :::{grid-item-card} 🖥️ Simulation
 :link: simulation
 :link-type: doc
@@ -111,6 +118,7 @@ TiPToP achieves 46.1% on MolmoSpaces — outperforming every approach not traine
 Home <self>
 installation
 getting-started
+cobot-magic
 simulation
 evaluation
 adding-new-embodiment

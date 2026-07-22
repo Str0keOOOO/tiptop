@@ -66,12 +66,16 @@ def _get_zed_camera(cam_cfg, depth: bool = False, pointcloud: bool = False) -> Z
 
 def _get_remote_realsense_camera(cam_cfg, depth: bool = False) -> Camera:
     """Create a RemoteRealsenseCamera from the local SSH-forwarded endpoint."""
+    if depth:
+        raise ValueError(
+            "Cobot Magic remote cameras do not provide hardware depth; use the configured FoundationStereo estimator"
+        )
     return RemoteRealsenseCamera(
         serial=str(cam_cfg.serial),
-        host=str(cam_cfg.get("host", "127.0.0.1")),
-        port=int(cam_cfg.get("port", 15556)),
-        enable_depth=depth,
+        host=str(cam_cfg.get("camera_host", cam_cfg.get("host", "127.0.0.1"))),
+        port=int(cam_cfg.get("camera_port", cam_cfg.get("port", 15556))),
         request_timeout_ms=int(cam_cfg.get("request_timeout_ms", 30_000)),
+        max_message_bytes=int(cam_cfg.get("max_message_bytes", 128 * 1024 * 1024)),
     )
 
 
