@@ -109,6 +109,29 @@ class ProcessedScene:
     grasps: dict[str, dict]  # Label -> grasp data with tensor versions
 
 
+def log_observation_camera(observation: Observation) -> None:
+    """Log the RGB-D camera as a world-space Rerun pinhole hierarchy."""
+    world_from_cam = observation.world_from_cam
+    height, width = observation.frame.rgb.shape[:2]
+    rr.log(
+        "world/camera",
+        rr.Transform3D(
+            translation=world_from_cam[:3, 3],
+            mat3x3=world_from_cam[:3, :3],
+        ),
+        static=True,
+    )
+    rr.log(
+        "world/camera",
+        rr.Pinhole(
+            image_from_camera=observation.frame.intrinsics,
+            resolution=[width, height],
+            camera_xyz=rr.ViewCoordinates.RDF,
+        ),
+        static=True,
+    )
+
+
 def capture_live_observation(container: _DemoContainer) -> Observation:
     """Read robot joint positions and compute world_from_cam via forward kinematics."""
     q_curr = container.robot.get_joint_positions()
@@ -296,7 +319,7 @@ def process_scene_geometry(
         xyz_map: World-space XYZ coordinates (H, W, 3)
         rgb_map: RGB image (H, W, 3) in 0-255 range
         masks: Segmentation masks from SAM2
-        bboxes: Bounding boxes from OmniGround
+        bboxes: Bounding boxes from the VLM
         grasps: Grasp predictions from M2T2
         object_pcds: Optional pre-computed object point clouds
 
@@ -342,14 +365,50 @@ def process_scene_geometry(
     # Re-associate grasps to objects based on contact point proximity
     # Collect all valid grasps in flat arrays first
     all_poses, all_confs, all_contacts, all_labels = [], [], [], []
-    for _, grasp_dict in grasps.items():
+    for group_name, grasp_dict in grasps.items():
         poses, confs, contacts = grasp_dict["poses"], grasp_dict["confidences"], grasp_dict["contacts"]
         if len(contacts) == 0:
             continue
 
         dists, nearest_idxs = combined_kdtree.query(contacts)
+        nearest_points = all_points[nearest_idxs]
         nearest_labels = point_to_label[nearest_idxs]
-        within_thresh = dists < tiptop_cfg().perception.contact_threshold_m
+        threshold = tiptop_cfg().perception.contact_threshold_m
+        within_thresh = dists < threshold
+        distance_percentiles_cm = np.percentile(dists, [0, 10, 25, 50, 75, 90, 100]) * 100.0
+        _log.info(
+            "M2T2 association %s: n=%d, accepted=%d, "
+            "distance_cm[min,p10,p25,p50,p75,p90,max]=[%.2f, %.2f, %.2f, %.2f, %.2f, %.2f, %.2f]",
+            group_name,
+            len(dists),
+            int(within_thresh.sum()),
+            *distance_percentiles_cm,
+        )
+
+        association_name = group_name.replace(" ", "_").replace("/", "_")
+        rr.log(
+            f"m2t2/association/{association_name}/all_contacts",
+            rr.Points3D(positions=contacts, colors=[255, 255, 255], radii=0.003),
+        )
+        if np.any(within_thresh):
+            rr.log(
+                f"m2t2/association/{association_name}/accepted",
+                rr.Points3D(positions=contacts[within_thresh], colors=[0, 255, 0], radii=0.005),
+            )
+        if np.any(~within_thresh):
+            rr.log(
+                f"m2t2/association/{association_name}/rejected",
+                rr.Points3D(positions=contacts[~within_thresh], colors=[255, 0, 255], radii=0.004),
+            )
+        rr.log(
+            f"m2t2/association/{association_name}/nearest_error",
+            rr.Arrows3D(
+                origins=contacts,
+                vectors=nearest_points - contacts,
+                colors=[255, 165, 0],
+                radii=0.0008,
+            ),
+        )
         all_poses.append(poses[within_thresh])
         all_confs.append(confs[within_thresh])
         all_contacts.append(contacts[within_thresh])
@@ -404,7 +463,9 @@ def process_scene_geometry(
         pcd = object_pcds[label]
         rr.log(f"obj_pcd/{label_clean}", rr.Points3D(positions=pcd.points, colors=pcd.colors))
 
-        # Transform grasps to tcp frame
+        # Convert M2T2 predictions into TiPToP's grasp frame. This is the
+        # production transform consumed by planning and must not be changed
+        # for visualization purposes.
         grasp_dict = filtered_grasps[label]
         world_from_obj = np.eye(4)
         curobo_pose = np.array(curobo_mesh.pose)
@@ -449,6 +510,156 @@ def process_scene_geometry(
     )
 
 
+def log_raw_m2t2_results(depth_results: dict, max_grasps: int = 100) -> None:
+    """Log M2T2's exact input and unfiltered grasp predictions to Rerun.
+
+    This intentionally runs before :func:`process_scene_geometry`, where raw
+    contacts are associated with SAM object point clouds and discarded if they
+    exceed ``contact_threshold_m``.  It therefore makes an empty
+    ``grasps/<object>`` entity diagnosable: the raw M2T2 results remain visible.
+    """
+    xyz_input = np.asarray(depth_results["xyz_downsampled"])
+    rgb_input = np.asarray(depth_results["rgb_downsampled"])
+    rr.log(
+        "m2t2/input_pcd",
+        rr.Points3D(positions=xyz_input, colors=rgb_input, radii=0.0015),
+    )
+
+    gripper_mesh = get_gripper_mesh()
+    vertices = np.asarray(gripper_mesh.vertices)
+    faces = np.asarray(gripper_mesh.triangles)
+    vertices_hom = np.c_[vertices, np.ones(len(vertices))]
+
+    for group_name, grasp_data in depth_results["grasps"].items():
+        poses = np.asarray(grasp_data["poses"])
+        confidences = np.asarray(grasp_data["confidences"])
+        contacts = np.asarray(grasp_data["contacts"])
+
+        _log.info(
+            "Raw M2T2 %s: poses=%s, contacts=%s, confidences=%s",
+            group_name,
+            poses.shape,
+            contacts.shape,
+            confidences.shape,
+        )
+        if len(poses) == 0:
+            _log.warning("Raw M2T2 %s returned zero grasps", group_name)
+            continue
+        if poses.ndim != 3 or poses.shape[1:] != (4, 4):
+            _log.warning("Skipping malformed raw M2T2 poses for %s: %s", group_name, poses.shape)
+            continue
+        if confidences.ndim != 1 or len(confidences) != len(poses):
+            _log.warning("Skipping raw M2T2 group %s with incompatible confidences: %s", group_name, confidences.shape)
+            continue
+
+        # Keep the viewer responsive while retaining the highest-confidence
+        # predictions. M2T2 output is still unfiltered by SAM/contact distance.
+        contacts_match_poses = contacts.ndim == 2 and contacts.shape == (len(poses), 3)
+        order = np.argsort(confidences)[::-1][:max_grasps]
+        poses = poses[order]
+        confidences = confidences[order]
+        if contacts_match_poses:
+            contacts = contacts[order]
+        safe_name = group_name.replace(" ", "_").replace("/", "_")
+
+        if contacts.ndim == 2 and contacts.shape == (len(poses), 3):
+            rr.log(
+                f"m2t2/raw_contacts/{safe_name}",
+                rr.Points3D(
+                    positions=contacts,
+                    colors=[255, 0, 255],
+                    radii=0.004,
+                    labels=[f"{rank}: {confidence:.3f}" for rank, confidence in enumerate(confidences)],
+                ),
+            )
+
+            # One entity per candidate makes it possible to inspect a single
+            # grasp without the other M2T2 frames obscuring it. The approach
+            # arrow is geometric (origin -> predicted contact), so it is more
+            # direct to interpret than the raw M2T2 coordinate axes alone.
+            for rank, (source_index, pose, contact, confidence) in enumerate(
+                zip(order, poses, contacts, confidences, strict=True)
+            ):
+                origin = pose[:3, 3]
+                rotation = pose[:3, :3]
+                grasp_path = f"m2t2/inspect/{safe_name}/grasp_{rank:03d}"
+                label = f"rank={rank}, source={source_index}, conf={confidence:.4f}"
+
+                rr.log(
+                    f"{grasp_path}/contact",
+                    rr.Points3D(positions=[contact], colors=[255, 0, 255], radii=0.005, labels=[label]),
+                )
+                rr.log(
+                    f"{grasp_path}/origin",
+                    rr.Points3D(positions=[origin], colors=[255, 255, 255], radii=0.004),
+                )
+                rr.log(
+                    f"{grasp_path}/approach",
+                    rr.Arrows3D(
+                        origins=[origin],
+                        vectors=[contact - origin],
+                        colors=[255, 255, 0],
+                        radii=0.002,
+                    ),
+                )
+                for axis_name, axis_index, color in (
+                    ("axis_x", 0, [255, 0, 0]),
+                    ("axis_y", 1, [0, 255, 0]),
+                    ("axis_z", 2, [0, 0, 255]),
+                ):
+                    rr.log(
+                        f"{grasp_path}/{axis_name}",
+                        rr.Arrows3D(
+                            origins=[origin],
+                            vectors=[rotation[:, axis_index] * 0.04],
+                            colors=color,
+                            radii=0.001,
+                        ),
+                    )
+
+                _log.info(
+                    "%s grasp=%d source=%d confidence=%.4f origin_z=%.4f "
+                    "contact_z=%.4f origin_minus_contact_z=%.4f",
+                    safe_name,
+                    rank,
+                    source_index,
+                    confidence,
+                    origin[2],
+                    contact[2],
+                    origin[2] - contact[2],
+                )
+        else:
+            _log.warning("Raw M2T2 %s has malformed contacts: %s", group_name, contacts.shape)
+
+        origins = poses[:, :3, 3]
+        rotations = poses[:, :3, :3]
+        for axis_name, axis_index, color in (("x", 0, [255, 0, 0]), ("y", 1, [0, 255, 0]), ("z", 2, [0, 0, 255])):
+            rr.log(
+                f"m2t2/raw_frames/{safe_name}/{axis_name}",
+                rr.Arrows3D(
+                    origins=origins,
+                    vectors=rotations[:, :, axis_index] * 0.04,
+                    colors=color,
+                    radii=0.0015,
+                ),
+            )
+
+        # Mirror the current production transform without applying object
+        # association or filtering, so this remains debug-only.
+        world_from_grasp = poses @ m2t2_to_tiptop_transform()
+        transformed_vertices = np.einsum("nij,mj->nmi", world_from_grasp, vertices_hom)[..., :3]
+        for rank, (mesh_vertices, color) in enumerate(zip(transformed_vertices, get_heatmap(confidences))):
+            rr.log(
+                f"m2t2/tcp_grasps/{safe_name}/{rank:04d}",
+                rr.Mesh3D(
+                    vertex_positions=mesh_vertices,
+                    triangle_indices=faces,
+                    vertex_colors=np.tile(color, (len(mesh_vertices), 1)),
+                ),
+                static=True,
+            )
+
+
 async def run_perception(
     session: aiohttp.ClientSession,
     observation: Observation,
@@ -464,7 +675,8 @@ async def run_perception(
     frame = observation.frame
     rgb = frame.rgb
     if log_to_rerun:
-        rr.log("rgb", rr.Image(rgb))
+        log_observation_camera(observation)
+        rr.log("world/camera/rgb", rr.Image(rgb))
 
     # Run depth+grasps and detection concurrently
     depth_results, detection_results = await asyncio.gather(
@@ -498,11 +710,13 @@ async def run_perception(
 
     if log_to_rerun:
         rr.log(
-            "pcd",
+            "world/pointcloud",
             rr.Points3D(
                 positions=depth_results["xyz_map"].reshape(-1, 3), colors=depth_results["rgb_map"].reshape(-1, 3)
             ),
         )
+        rr.log("world/camera/depth", rr.DepthImage(depth_results["depth_map"], meter=1.0))
+        log_raw_m2t2_results(depth_results)
 
     # Run scene geometry processing while saving
     proc_st = time.perf_counter()
@@ -518,8 +732,8 @@ async def run_perception(
 
     if log_to_rerun:
         bbox_viz, masks_viz = save_result
-        rr.log("bboxes", rr.Image(bbox_viz))
-        rr.log("masks", rr.Image(masks_viz))
+        rr.log("world/camera/bboxes", rr.Image(bbox_viz))
+        rr.log("world/camera/masks", rr.Image(masks_viz))
 
     env, all_surfaces = create_tamp_environment(
         processed_scene.object_meshes,
