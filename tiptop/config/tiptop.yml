@@ -58,13 +58,13 @@ cameras:
 # No need to change these unless you're running them on a remote machine or changed the ports
 perception:
   # OmniGround contract: multipart PNG/JPEG image, the complete prompt,
-  # required model_id, and an optional temperature.  The direct success body is
+  # optional temperature. The model is selected when the OmniGround service starts.
+  # The direct success body is
   # {"bboxes": [...], "predicates": [...]} (not a text/result wrapper).
   omniground:
     url: "http://localhost:8011"
     endpoint: "/generate"
     timeout_seconds: 120
-    model_id: "qwen3.7-plus"
     temperature: null
 
   foundation_stereo:
@@ -83,4 +83,3 @@ perception:
   voxel_downsample_size: 0.0075  # Point cloud downsampling in meters before feeding into M2T2
   contact_threshold_m: 0.01      # Grasp-object association distance threshold
   mask_erosion_pixels: 3         # Pixels to erode segmentation masks to reduce noise
-

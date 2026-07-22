@@ -81,7 +81,6 @@ class OmniGroundClient:
         *,
         url: str,
         endpoint: str,
-        model_id: str,
         timeout_seconds: float,
         temperature: float | None = None,
     ) -> None:
@@ -89,14 +88,11 @@ class OmniGroundClient:
             raise ValueError("perception.omniground.url is required")
         if endpoint not in {"/generate", "/v1/generate"}:
             raise ValueError("perception.omniground.endpoint must be /generate or /v1/generate")
-        if not model_id:
-            raise ValueError("perception.omniground.model_id is required")
         timeout_seconds = float(timeout_seconds)
         if not math.isfinite(timeout_seconds) or timeout_seconds <= 0.0:
             raise ValueError("perception.omniground.timeout_seconds must be finite and positive")
 
         self.url = f"{url.rstrip('/')}{endpoint}"
-        self.model_id = model_id
         self.timeout_seconds = timeout_seconds
         self.temperature = temperature
 
@@ -123,7 +119,6 @@ class OmniGroundClient:
         data = aiohttp.FormData()
         data.add_field("image", image_bytes.getvalue(), filename="image.png", content_type="image/png")
         data.add_field("prompt", prompt, content_type="text/plain; charset=utf-8")
-        data.add_field("model_id", self.model_id, content_type="text/plain; charset=utf-8")
         if selected_temperature is not None:
             data.add_field("temperature", str(selected_temperature))
 
@@ -170,7 +165,6 @@ def omniground_client() -> OmniGroundClient:
     return OmniGroundClient(
         url=cfg.url,
         endpoint=cfg.endpoint,
-        model_id=cfg.model_id,
         timeout_seconds=cfg.timeout_seconds,
         temperature=cfg.get("temperature"),
     )

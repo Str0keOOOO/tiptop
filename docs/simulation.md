@@ -46,7 +46,7 @@ This downloads **5 scenes** (scene IDs 1–5) as USD files into the `assets/` di
 To see what the scenes look like, and also an example natural language command in each scene, look at the [README for the sim evals repo](https://github.com/tiptop-robot/droid-sim-evals).
 
 
-Start the OmniGround service configured in `tiptop/config/tiptop.yml`. TiPToP sends multipart `image`, complete `prompt`, and required `model_id` fields and expects the direct `{"bboxes": [...], "predicates": [...]}` JSON response.
+Start the OmniGround service configured in `tiptop/config/tiptop.yml`. Select the model when starting OmniGround. TiPToP sends multipart `image` and complete `prompt` fields and expects the direct `{"bboxes": [...], "predicates": [...]}` JSON response.
 
 In all simulation workflows, M2T2 must be running. Start it first:
 

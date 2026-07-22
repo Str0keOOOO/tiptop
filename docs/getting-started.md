@@ -59,7 +59,7 @@ If using `fr3` or `panda`, you should define wrist camera collision spheres in t
 
 You can check `tiptop/config/tiptop.yml` for the full config available.
 
-For `cobot_magic`, `tiptop-config` asks for the local controller and camera SSH-tunnel endpoints separately, along with the OmniGround endpoint, model ID, timeout, and optional temperature. See [Cobot Magic Remote Runtime](cobot-magic.md) before moving the robot.
+For `cobot_magic`, `tiptop-config` asks for the local controller and camera SSH-tunnel endpoints separately, along with the OmniGround endpoint, timeout, and optional temperature. See [Cobot Magic Remote Runtime](cobot-magic.md) before moving the robot.
 
 ### Verify robot connection and camera
 
@@ -83,7 +83,7 @@ See [Troubleshooting](#troubleshooting) to debug any problems you may have.
 TiPToP sends grounding requests to OmniGround before calibration or demos. Start the configured OmniGround service first.
 ```
 
-Set `perception.omniground.url`, `endpoint` (`/generate` or `/v1/generate`), required `model_id`, optional `temperature`, and `timeout_seconds`. TiPToP posts multipart form data with a PNG `image`, the complete `prompt`, and `model_id`. OmniGround returns the direct JSON object `{"bboxes": [...], "predicates": [...]}`; text wrappers and Markdown code fences are rejected.
+Set `perception.omniground.url`, `endpoint` (`/generate` or `/v1/generate`), optional `temperature`, and `timeout_seconds`. Select the model when starting OmniGround; TiPToP posts multipart form data with a PNG `image` and the complete `prompt`. OmniGround returns the direct JSON object `{"bboxes": [...], "predicates": [...]}`; text wrappers and Markdown code fences are rejected.
 
 For a Cobot Magic upper computer and its remote RealSense bridge, see [Cobot Magic Remote Runtime](cobot-magic.md).
 

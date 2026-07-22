@@ -255,9 +255,7 @@ def entrypoint():
     if endpoint not in ("/generate", "/v1/generate"):
         raise ValueError("OmniGround endpoint must be /generate or /v1/generate")
     omniground_config["endpoint"] = endpoint
-    omniground_config["model_id"] = prompt_with_default(
-        "OmniGround model_id", str(omniground_config.get("model_id", "")), allow_skip=False
-    )
+    omniground_config.pop("model_id", None)
     omniground_config["timeout_seconds"] = float(
         prompt_with_default("OmniGround timeout (seconds)", str(omniground_config.get("timeout_seconds", 120)))
     )
