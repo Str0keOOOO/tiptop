@@ -9,14 +9,24 @@ import requests
 from jaxtyping import Float
 from scipy.spatial.transform import Rotation
 
+from tiptop.config import tiptop_cfg
 from tiptop.utils import ServerHealthCheckError
 
 _log = logging.getLogger(__name__)
 
 
 @cache
+def m2t2_skeleton_to_tcp_transform() -> np.ndarray:
+    """Read the configured M2T2 skeleton-to-TCP local transform."""
+    rpy_deg = np.asarray(tiptop_cfg().perception.m2t2.skeleton_to_tcp_rpy_deg, dtype=np.float64)
+    transform = np.eye(4)
+    transform[:3, :3] = Rotation.from_euler("xyz", rpy_deg, degrees=True).as_matrix()
+    return transform
+
+
+@cache
 def m2t2_to_tiptop_transform():
-    """4x4 transform to take M2T2 grasp poses to the convention expected by tiptop."""
+    """4x4 transform from M2T2's skeleton-gripper frame to Cobot Magic TCP."""
     # Panda offset
     base_to_tcp = np.eye(4)
     base_to_tcp[2, 3] = 0.1034
@@ -24,7 +34,21 @@ def m2t2_to_tiptop_transform():
     # To tiptop frame with z-up
     to_tiptop_frame = np.eye(4)
     to_tiptop_frame[:3, :3] = Rotation.from_euler("xyz", np.array([np.pi, 0, -np.pi / 2])).as_matrix()
-    return base_to_tcp @ to_tiptop_frame
+
+    return base_to_tcp @ to_tiptop_frame @ m2t2_skeleton_to_tcp_transform()
+
+
+def log_m2t2_to_tiptop_transform_diagnostics() -> None:
+    """Log validity and orientation of the fixed M2T2-to-TCP transform."""
+    transform = m2t2_to_tiptop_transform()
+    rotation = transform[:3, :3]
+    _log.warning("[M2T2Transform] T_fix=\n%s", np.array2string(transform, precision=6))
+    _log.warning(
+        "[M2T2Transform] det(R_fix)=%.8f orthogonality_error=%.8e euler_xyz_deg=%s",
+        np.linalg.det(rotation),
+        np.linalg.norm(rotation.T @ rotation - np.eye(3)),
+        np.array2string(Rotation.from_matrix(rotation).as_euler("xyz", degrees=True), precision=4),
+    )
 
 
 def _build_payload(

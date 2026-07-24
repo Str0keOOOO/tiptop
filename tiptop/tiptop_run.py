@@ -37,7 +37,7 @@ from tiptop.perception.cameras import (
     get_external_camera,
     get_hand_camera,
 )
-from tiptop.perception.m2t2 import m2t2_to_tiptop_transform
+from tiptop.perception.m2t2 import log_m2t2_to_tiptop_transform_diagnostics, m2t2_to_tiptop_transform
 from tiptop.perception.sam2 import sam2_client
 from tiptop.perception.segmentation import segment_pointcloud_by_masks, segment_table_with_ransac
 from tiptop.perception.utils import convert_trimesh_box_to_curobo_cuboid, convert_trimesh_to_curobo_mesh
@@ -141,6 +141,40 @@ def capture_live_observation(container: _DemoContainer) -> Observation:
     frame = container.cam.read_camera()
     return Observation(frame=frame, world_from_cam=world_from_cam, q_init=q_curr)
 
+
+def debug_log_curobo_tcp(world_from_tcp: Float[np.ndarray, "4 4"]) -> None:
+    """Log cuRobo's TCP frame and the grasp mesh expressed in that frame."""
+    origin = world_from_tcp[:3, 3]
+    rotation = world_from_tcp[:3, :3]
+
+    # Display the XYZ axes of cuRobo's tool_center_point.
+    for name, index, color in (
+        ("x", 0, [255, 0, 0]),
+        ("y", 1, [0, 255, 0]),
+        ("z", 2, [0, 0, 255]),
+    ):
+        rr.log(
+            f"debug/curobo_tcp/{name}",
+            rr.Arrows3D(
+                origins=[origin],
+                vectors=[rotation[:, index] * 0.08],
+                colors=color,
+                radii=0.002,
+            ),
+        )
+
+    # Place the Rerun grasp mesh directly at cuRobo's TCP.
+    mesh = get_gripper_mesh()
+    vertices = np.asarray(mesh.vertices)
+    vertices_hom = np.c_[vertices, np.ones(len(vertices))]
+    vertices_world = (world_from_tcp @ vertices_hom.T).T[:, :3]
+    rr.log(
+        "debug/gripper_mesh_at_curobo_tcp",
+        rr.Mesh3D(
+            vertex_positions=vertices_world,
+            triangle_indices=np.asarray(mesh.triangles),
+        ),
+    )
 
 def get_demo_container(
     num_particles: int, num_spheres: int, collision_activation_distance: float, enable_recording: bool = False
@@ -260,15 +294,23 @@ def create_tamp_environment(
         if atom["predicate"] == "on" and len(atom["args"]) == 2:
             surface_labels.add(atom["args"][1])
 
-    # Separate movables and surfaces
+    # Fixed objects are static collision obstacles, not planning objects. They
+    # take precedence over a role inferred from the language goal.
+    fixed_object_labels = set(tiptop_cfg().environment.fixed_object_labels)
+
+    # Separate movables, fixed obstacles, and surfaces.
     movables = []
+    fixed_objects = []
     surfaces = []
     for label, mesh in object_meshes.items():
-        if label in surface_labels:
+        if label in fixed_object_labels:
+            fixed_objects.append(mesh)
+        elif label in surface_labels:
             surfaces.append(mesh)
         else:
             movables.append(mesh)
     _log.info(f"Movables: {[m.name for m in movables]}")
+    _log.info(f"Fixed obstacles: {[m.name for m in fixed_objects]}")
     _log.info(f"Surfaces: {[s.name for s in surfaces]}")
 
     # Create goal state from grounded atoms
@@ -290,6 +332,7 @@ def create_tamp_environment(
     # All surfaces include table and detected surface objects
     all_surfaces = [table_cuboid, *surfaces]
     statics = list(workspace_cuboids()) if include_workspace else []
+    statics.extend(fixed_objects)
     for surface in all_surfaces:
         statics.append(surface)
 
@@ -326,6 +369,8 @@ def process_scene_geometry(
     Returns:
         ProcessedScene with table cuboid, object meshes, pcds, and filtered grasps
     """
+    log_m2t2_to_tiptop_transform_diagnostics()
+
     # Segment table with RANSAC (returns trimesh Box)
     table_trimesh = segment_table_with_ransac(xyz_map, rgb_map, masks)
     table_cuboid = convert_trimesh_box_to_curobo_cuboid(table_trimesh, name="table")
@@ -769,13 +814,22 @@ async def async_entrypoint(container: _DemoContainer, config: TAMPConfiguration,
                 timestamp = now.strftime("%Y-%m-%d_%H-%M-%S")
                 iso_timestamp = now.isoformat(timespec="seconds")
                 date_str = now.strftime("%Y-%m-%d")
+                save_dir = Path(output_dir) / "eval" / timestamp
+                save_dir.mkdir(parents=True, exist_ok=True)
                 rr.init("tiptop_run", recording_id=timestamp, spawn=True)
+                if execute_plan:
+                    try:
+                        rrd_path = save_dir / "tiptop_run.rrd"
+                        rr.save(rrd_path)
+                        _log.info(f"Saving Rerun recording to {rrd_path}")
+                    except Exception:
+                        _log.exception("Failed to start Rerun recording")
+
                 # Log workspace for visualization purposes
                 robot_rr = get_robot_rerun()
                 for obj in workspace_cuboids():
                     log_curobo_mesh_to_rerun(f"world/workspace/{obj.name}", obj.get_mesh(), static_transform=True)
 
-                save_dir = Path(output_dir) / "eval" / timestamp
                 _log.info(f"Saving logs, results, and visualizations to {save_dir}")
 
                 # Add log file handler for this run
@@ -784,6 +838,12 @@ async def async_entrypoint(container: _DemoContainer, config: TAMPConfiguration,
                     # Capture robot state and compute camera pose
                     observation = capture_live_observation(container)
                     robot_rr.set_joint_positions(observation.q_init)
+
+                    q = tensor_args.to_device(observation.q_init)
+                    world_from_tcp = (
+                        container.motion_gen.kinematics.get_state(q).ee_pose.get_numpy_matrix()[0]
+                    )
+                    debug_log_curobo_tcp(world_from_tcp)
 
                     # Now we're ready! Start timing
                     _log.info("Running Perception...")
@@ -863,30 +923,30 @@ async def async_entrypoint(container: _DemoContainer, config: TAMPConfiguration,
                         _log.info(f"Logs, results, and visualizations saved to {save_dir}")
 
                     if execute_plan:
+                        # Move eval/timestamp -> success/failure/timestamp
                         _label_rollout(save_dir, output_dir, date_str, timestamp)
 
-                        # If the goal was just to pick an object (i.e., goal contains Holding), ask the user to confirm before
-                        # opening the gripper so the object can drop safely
-                        if cutamp_plan is not None and any(atom.fluent.name == Holding.name for atom in env.goal_state):
+                        # If the goal was just to pick an object (i.e., goal contains Holding),
+                        # ask the user to confirm before opening the gripper.
+                        if cutamp_plan is not None and any(
+                            atom.fluent.name == Holding.name for atom in env.goal_state
+                        ):
                             print("WARNING: object will drop when gripper opens, so be ready to catch it.")
+
                             while True:
                                 try:
                                     response = input("Open gripper? [y]: ").strip().lower()
                                 except KeyboardInterrupt:
                                     raise UserExitException("User interrupted with Ctrl+C")
+
                                 if response == "y":
                                     break
+
                             container.robot.open_gripper()
                 except Exception:
                     _log.exception("TiPToP run failed")
                     raise
                 finally:
-                    try:
-                        rrd_path = save_dir / "tiptop_run.rrd"
-                        rr.save(rrd_path)
-                        _log.info(f"Saved Rerun recording to {rrd_path}")
-                    except Exception:
-                        _log.exception("Failed to save Rerun recording")
                     remove_file_handler(file_handler)
             except (UserExitException, KeyboardInterrupt) as e:
                 if isinstance(e, KeyboardInterrupt):
